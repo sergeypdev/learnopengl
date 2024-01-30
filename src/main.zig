@@ -2,13 +2,6 @@ const std = @import("std");
 const c = @import("c.zig");
 const builtin = @import("builtin");
 
-fn sdl_try(result: c_int) !void {
-    if (result < 0) {
-        std.log.err("SDL Error: {s}", .{c.SDL_GetError()});
-        return error.SDLError;
-    }
-}
-
 const game_lib_basename = "learnopengl";
 const game_lib_name: [:0]const u8 = builtin.target.libPrefix() ++ game_lib_basename ++ builtin.target.dynamicLibSuffix();
 
@@ -23,30 +16,10 @@ pub fn main() !void {
 
     const game_lib_path = try getGameLibPath(allocator);
 
-    try sdl_try(c.SDL_Init(c.SDL_INIT_EVERYTHING));
-    defer c.SDL_Quit();
-
-    try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_DOUBLEBUFFER, 1));
-    try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MAJOR_VERSION, 4));
-    try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, 1));
-    try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE));
-
-    const maybe_window = c.SDL_CreateWindow("Learn OpenGL with Zig!", c.SDL_WINDOWPOS_CENTERED, c.SDL_WINDOWPOS_CENTERED, 800, 600, c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_OPENGL);
-    if (maybe_window == null) {
-        std.log.err("SDL Error: {s}", .{c.SDL_GetError()});
-        return error.SDLWindowError;
-    }
-    const window = maybe_window.?;
-
-    const context = c.SDL_GL_CreateContext(window);
-    defer c.SDL_GL_DeleteContext(context);
-
-    _ = c.gladLoadGLLoader(c.SDL_GL_GetProcAddress);
-
-    std.log.debug("OpenGL Version: {}.{}", .{ c.GLVersion.major, c.GLVersion.minor });
-
     var modified = try getFileModifiedZ(game_lib_path);
     game_api = try loadGameAPI(allocator, game_lib_path);
+
+    game_api.game_init_window(&allocator);
 
     game_api.game_init(&allocator);
     defer {
@@ -65,25 +38,42 @@ pub fn main() !void {
             modified = new_modified;
             var new_game_api = try loadGameAPI(allocator, game_lib_path);
 
-            if (game_api.game_memory_size() == new_game_api.game_memory_size()) {
-                std.log.debug("Hot reload with state!\n", .{});
-                const game_memory = game_api.game_memory();
-                game_api.deinit(allocator);
-                new_game_api.game_hot_reload(game_memory);
-                game_api = new_game_api;
-            } else {
-                std.log.debug("Hot reload with shutdown!\n", .{});
-                game_api.game_shutdown();
-                game_api.deinit(allocator);
-                game_api = new_game_api;
-                game_api.game_init(&allocator);
+            var recreate_state = false;
+            var recreate_window = false;
+
+            const game_init_memory = game_api.game_init_memory();
+            const game_memory = game_api.game_memory();
+
+            if (game_api.game_memory_size() != new_game_api.game_memory_size()) {
+                recreate_state = true;
             }
+            if (game_api.game_init_memory_size() != new_game_api.game_init_memory_size()) {
+                recreate_window = true;
+            }
+
+            if (recreate_state) {
+                game_api.game_shutdown();
+            }
+            if (recreate_window) {
+                game_api.game_shutdown_window();
+            }
+
+            if (recreate_window) {
+                new_game_api.game_init_window(&allocator);
+            } else {
+                new_game_api.game_hot_reload(game_init_memory, null);
+            }
+            if (recreate_state) {
+                new_game_api.game_init(&allocator);
+            } else {
+                new_game_api.game_hot_reload(null, game_memory);
+            }
+
+            game_api.deinit(allocator);
+            game_api = new_game_api;
         }
 
         exit = !game_api.game_update();
-
-        c.SDL_GL_SwapWindow(window);
-        c.SDL_Delay(1);
     }
 }
 
@@ -128,22 +118,30 @@ fn loadGameAPI(arena: std.mem.Allocator, game_lib_path: [:0]const u8) !GameAPI {
 }
 
 const GameAPI = struct {
+    game_init_window: *const fn (*std.mem.Allocator) callconv(.C) void,
     game_init: *const fn (*std.mem.Allocator) callconv(.C) void,
     game_update: *const fn () callconv(.C) bool,
     game_shutdown: *const fn () callconv(.C) void,
+    game_shutdown_window: *const fn () callconv(.C) void,
     game_memory_size: *const fn () callconv(.C) usize,
+    game_init_memory_size: *const fn () callconv(.C) usize,
     game_memory: *const fn () callconv(.C) *anyopaque,
-    game_hot_reload: *const fn (*anyopaque) callconv(.C) void,
+    game_init_memory: *const fn () callconv(.C) *anyopaque,
+    game_hot_reload: *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void,
     dll: ?*anyopaque,
     path: [:0]const u8,
 
     pub fn init(dll: ?*anyopaque, path: [:0]const u8) !GameAPI {
         return GameAPI{
+            .game_init_window = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_init_window") orelse return error.MissingGameInitWindow)),
             .game_init = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_init") orelse return error.MissingGameInit)),
             .game_update = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_update") orelse return error.MissingGameUpdate)),
             .game_shutdown = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_shutdown") orelse return error.MissingGameShutdown)),
+            .game_shutdown_window = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_shutdown_window") orelse return error.MissingGameShutdownWindow)),
             .game_memory_size = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_memory_size") orelse return error.MissingGameMemorySize)),
+            .game_init_memory_size = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_init_memory_size") orelse return error.MissingGameInitMemorySize)),
             .game_memory = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_memory") orelse return error.MissingGameMemory)),
+            .game_init_memory = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_init_memory") orelse return error.MissingGameInitMemory)),
             .game_hot_reload = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_hot_reload") orelse return error.MissingGameHotReload)),
             .dll = dll,
             .path = path,
