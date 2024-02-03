@@ -15,19 +15,11 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    // const sdl_dep = b.dependency("SDL", .{
-    //     .target = target,
-    //     .optimize = .ReleaseSafe,
-    // });
-    // const sdl2 = sdl_dep.artifact("SDL2");
-
-    const glad = b.addSharedLibrary(.{
-        .name = "glad",
+    const sdl_dep = b.dependency("SDL", .{
         .target = target,
-        .optimize = optimize,
+        .optimize = .ReleaseSafe,
     });
-    glad.addCSourceFile(.{ .file = .{ .path = "src/glad.c" } });
-    glad.addIncludePath(.{ .path = "include" });
+    const sdl2 = sdl_dep.artifact("SDL2");
 
     const lib = b.addSharedLibrary(.{
         .name = "learnopengl",
@@ -36,11 +28,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    lib.linkSystemLibrary("SDL2");
-    lib.addSystemIncludePath(.{ .path = "/opt/homebrew/opt/sdl2/include/" });
-    lib.addLibraryPath(.{ .path = "/opt/homebrew/opt/sdl2/lib" });
-    lib.linkLibrary(glad);
-    lib.addIncludePath(.{ .path = "include" });
+    lib.linkLibrary(sdl2);
 
     const installLib = b.addInstallArtifact(lib, .{
         .dest_dir = .{ .override = .bin },
@@ -56,11 +44,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.linkSystemLibrary("SDL2");
-    exe.addSystemIncludePath(.{ .path = "/opt/homebrew/opt/sdl2/include/" });
-    exe.addLibraryPath(.{ .path = "/opt/homebrew/opt/sdl2/lib" });
-    exe.linkLibrary(glad);
-    exe.addIncludePath(.{ .path = "include" });
+    exe.linkLibrary(sdl2);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

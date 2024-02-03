@@ -16,8 +16,8 @@
     // internet connectivity.
     .dependencies = .{
         .SDL = .{
-            .url = "https://github.com/sergeypdev/SDL/tarball/0d062f21742b2914a0258df718931f80a952be1a",
-            .hash = "122009e9c57dcbc6cd92be92c61eba913468ecfebd6c166011f6065a3ffbdc75f45f",
+            .url = "https://github.com/sergeypdev/SDL/tarball/b23c0ba880c53e5e98c57d2d5470c8d551a520b3",
+            .hash = "122080136ee910b4bec7be16e6c69cf1e7fc4f69d14f4d7d2dd1bba3c3fe30e489a3",
         },
     },
     .paths = .{

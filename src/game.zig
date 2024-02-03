@@ -1,5 +1,6 @@
 const std = @import("std");
 const c = @import("c.zig");
+const gl = @import("gl.zig");
 
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
@@ -15,9 +16,9 @@ pub const InitMemory = struct {
 pub const GameMemory = struct {
     global_allocator: std.mem.Allocator,
     counter: i32 = 0,
-    triangle_vao: c.GLuint = 0,
-    triangle_vbo: c.GLuint = 0,
-    shader_program: c.GLuint = 0,
+    triangle_vao: gl.GLuint = 0,
+    triangle_vbo: gl.GLuint = 0,
+    shader_program: gl.GLuint = 0,
 };
 
 var g_init_exists = false;
@@ -29,7 +30,7 @@ fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
 
     try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_DOUBLEBUFFER, 1));
     try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MAJOR_VERSION, 4));
-    try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, 1));
+    try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, 5));
     try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE));
 
     const maybe_window = c.SDL_CreateWindow(
@@ -48,13 +49,20 @@ fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
 
     const context = c.SDL_GL_CreateContext(window);
 
-    if (c.gladLoadGLLoader(c.SDL_GL_GetProcAddress) == 0) {
-        return error.GladInitError;
-    }
+    try gl.load(null, struct {
+        fn getProcAddress(ctx: @TypeOf(null), proc: [:0]const u8) ?gl.FunctionPointer {
+            _ = ctx;
+            return @ptrCast(c.SDL_GL_GetProcAddress(proc));
+        }
+    }.getProcAddress);
 
-    c.glViewport(0, 0, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+    gl.viewport(0, 0, DEFAULT_WIDTH, DEFAULT_HEIGHT);
 
-    std.log.debug("OpenGL Version: {}.{}", .{ c.GLVersion.major, c.GLVersion.minor });
+    var majorVer: gl.GLint = 0;
+    var minorVer: gl.GLint = 0;
+    gl.getIntegerv(gl.MAJOR_VERSION, &majorVer);
+    gl.getIntegerv(gl.MINOR_VERSION, &minorVer);
+    std.log.debug("OpenGL Version: {}.{}", .{ majorVer, minorVer });
 
     g_init = try global_allocator.create(InitMemory);
     g_init_exists = true;
@@ -82,52 +90,52 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .global_allocator = global_allocator.*,
     };
 
-    c.glGenBuffers(1, &g_mem.triangle_vbo);
-    c.glGenVertexArrays(1, &g_mem.triangle_vao);
+    gl.genBuffers(1, &g_mem.triangle_vbo);
+    gl.genVertexArrays(1, &g_mem.triangle_vao);
 
-    c.glBindVertexArray(g_mem.triangle_vao);
+    gl.bindVertexArray(g_mem.triangle_vao);
 
-    c.glBindBuffer(c.GL_ARRAY_BUFFER, g_mem.triangle_vbo);
-    c.glBufferData(c.GL_ARRAY_BUFFER, @sizeOf(@TypeOf(vertices)), &vertices, c.GL_STATIC_DRAW);
-    c.glVertexAttribPointer(0, 3, c.GL_FLOAT, c.GL_FALSE, @sizeOf(f32) * 3, @ptrFromInt(0));
-    c.glEnableVertexAttribArray(0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, g_mem.triangle_vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, @sizeOf(@TypeOf(vertices)), &vertices, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, @sizeOf(f32) * 3, @ptrFromInt(0));
+    gl.enableVertexAttribArray(0);
 
-    const vertex_shader = c.glCreateShader(c.GL_VERTEX_SHADER);
-    defer c.glDeleteShader(vertex_shader);
+    const vertex_shader = gl.createShader(gl.VERTEX_SHADER);
+    defer gl.deleteShader(vertex_shader);
 
-    c.glShaderSource(vertex_shader, 1, &[_][*c]const u8{vertex_shader_code}, null);
-    c.glCompileShader(vertex_shader);
+    gl.shaderSource(vertex_shader, 1, &[_][*c]const u8{vertex_shader_code}, null);
+    gl.compileShader(vertex_shader);
     var success: c_int = 0;
-    c.glGetShaderiv(vertex_shader, c.GL_COMPILE_STATUS, &success);
+    gl.getShaderiv(vertex_shader, gl.COMPILE_STATUS, &success);
     if (success == 0) {
         var info_log: [512:0]u8 = undefined;
-        c.glGetShaderInfoLog(vertex_shader, info_log.len, null, &info_log);
+        gl.getShaderInfoLog(vertex_shader, info_log.len, null, &info_log);
         std.log.err("ERROR::SHADER::VERTEX::COMPILATION_FAILED\n{s}\n", .{@as([:0]const u8, &info_log)});
     }
 
-    const fragment_shader = c.glCreateShader(c.GL_FRAGMENT_SHADER);
-    defer c.glDeleteShader(fragment_shader);
+    const fragment_shader = gl.createShader(gl.FRAGMENT_SHADER);
+    defer gl.deleteShader(fragment_shader);
 
-    c.glShaderSource(fragment_shader, 1, &[_][*c]const u8{fragment_shader_code}, null);
-    c.glCompileShader(fragment_shader);
+    gl.shaderSource(fragment_shader, 1, &[_][*c]const u8{fragment_shader_code}, null);
+    gl.compileShader(fragment_shader);
     success = 0;
-    c.glGetShaderiv(fragment_shader, c.GL_COMPILE_STATUS, &success);
+    gl.getShaderiv(fragment_shader, gl.COMPILE_STATUS, &success);
     if (success == 0) {
         var info_log: [512:0]u8 = undefined;
-        c.glGetShaderInfoLog(fragment_shader, info_log.len, null, &info_log);
+        gl.getShaderInfoLog(fragment_shader, info_log.len, null, &info_log);
         std.log.err("ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n{s}\n", .{@as([:0]const u8, &info_log)});
     }
 
-    g_mem.shader_program = c.glCreateProgram();
-    c.glAttachShader(g_mem.shader_program, vertex_shader);
-    c.glAttachShader(g_mem.shader_program, fragment_shader);
-    c.glLinkProgram(g_mem.shader_program);
+    g_mem.shader_program = gl.createProgram();
+    gl.attachShader(g_mem.shader_program, vertex_shader);
+    gl.attachShader(g_mem.shader_program, fragment_shader);
+    gl.linkProgram(g_mem.shader_program);
 
     success = 0;
-    c.glGetProgramiv(g_mem.shader_program, c.GL_LINK_STATUS, &success);
+    gl.getProgramiv(g_mem.shader_program, gl.LINK_STATUS, &success);
     if (success == 0) {
         var info_log: [512:0]u8 = undefined;
-        c.glGetProgramInfoLog(g_mem.shader_program, info_log.len, null, &info_log);
+        gl.getProgramInfoLog(g_mem.shader_program, info_log.len, null, &info_log);
         std.log.err("ERROR::SHADER::PROGRAM::LINK_FAILED\n{s}\n", .{@as([:0]const u8, &info_log)});
     }
 }
@@ -159,7 +167,7 @@ export fn game_update() bool {
                         g_init.width = event.window.data1;
                         g_init.height = event.window.data2;
 
-                        c.glViewport(0, 0, g_init.width, g_init.height);
+                        gl.viewport(0, 0, g_init.width, g_init.height);
                     },
                     else => {},
                 }
@@ -168,12 +176,12 @@ export fn game_update() bool {
         }
         g_mem.counter += 1;
 
-        c.glClearColor(0.0, 0.0, 0.0, 1.0);
-        c.glClear(c.GL_COLOR_BUFFER_BIT);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
 
-        c.glUseProgram(g_mem.shader_program);
-        c.glBindVertexArray(g_mem.triangle_vao);
-        c.glDrawArrays(c.GL_TRIANGLES, 0, 3);
+        gl.useProgram(g_mem.shader_program);
+        gl.bindVertexArray(g_mem.triangle_vao);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
 
         c.SDL_GL_SwapWindow(g_init.window);
         c.SDL_Delay(1);
