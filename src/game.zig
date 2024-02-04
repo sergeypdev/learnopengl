@@ -49,12 +49,6 @@ fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
 
     const context = c.SDL_GL_CreateContext(window);
 
-    // var majorVer: gl.GLint = 0;
-    // var minorVer: gl.GLint = 0;
-    // gl.getIntegerv(gl.MAJOR_VERSION, &majorVer);
-    // gl.getIntegerv(gl.MINOR_VERSION, &minorVer);
-    // std.log.debug("OpenGL Version: {}.{}", .{ majorVer, minorVer });
-
     g_init = try global_allocator.create(InitMemory);
     g_init_exists = true;
     g_init.* = .{
@@ -94,6 +88,12 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     };
 
     loadGL();
+
+    var majorVer: gl.GLint = 0;
+    var minorVer: gl.GLint = 0;
+    gl.getIntegerv(gl.MAJOR_VERSION, &majorVer);
+    gl.getIntegerv(gl.MINOR_VERSION, &minorVer);
+    std.log.debug("OpenGL Version: {}.{}", .{ majorVer, minorVer });
 
     gl.viewport(0, 0, g_init.width, g_init.height);
 
