@@ -49,20 +49,11 @@ fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
 
     const context = c.SDL_GL_CreateContext(window);
 
-    try gl.load(null, struct {
-        fn getProcAddress(ctx: @TypeOf(null), proc: [:0]const u8) ?gl.FunctionPointer {
-            _ = ctx;
-            return @ptrCast(c.SDL_GL_GetProcAddress(proc));
-        }
-    }.getProcAddress);
-
-    gl.viewport(0, 0, DEFAULT_WIDTH, DEFAULT_HEIGHT);
-
-    var majorVer: gl.GLint = 0;
-    var minorVer: gl.GLint = 0;
-    gl.getIntegerv(gl.MAJOR_VERSION, &majorVer);
-    gl.getIntegerv(gl.MINOR_VERSION, &minorVer);
-    std.log.debug("OpenGL Version: {}.{}", .{ majorVer, minorVer });
+    // var majorVer: gl.GLint = 0;
+    // var minorVer: gl.GLint = 0;
+    // gl.getIntegerv(gl.MAJOR_VERSION, &majorVer);
+    // gl.getIntegerv(gl.MINOR_VERSION, &minorVer);
+    // std.log.debug("OpenGL Version: {}.{}", .{ majorVer, minorVer });
 
     g_init = try global_allocator.create(InitMemory);
     g_init_exists = true;
@@ -83,12 +74,28 @@ export fn game_init_window(global_allocator: *std.mem.Allocator) void {
     };
 }
 
+fn loadGL() void {
+    gl.load(null, struct {
+        fn getProcAddress(ctx: @TypeOf(null), proc: [:0]const u8) ?gl.FunctionPointer {
+            _ = ctx;
+            return @ptrCast(c.SDL_GL_GetProcAddress(proc));
+        }
+    }.getProcAddress) catch |err| {
+        std.log.debug("Failed to load gl funcs {}\n", .{err});
+        @panic("gl.load");
+    };
+}
+
 export fn game_init(global_allocator: *std.mem.Allocator) void {
     std.log.debug("game_init\n", .{});
     g_mem = global_allocator.create(GameMemory) catch @panic("OOM");
     g_mem.* = .{
         .global_allocator = global_allocator.*,
     };
+
+    loadGL();
+
+    gl.viewport(0, 0, g_init.width, g_init.height);
 
     gl.genBuffers(1, &g_mem.triangle_vbo);
     gl.genVertexArrays(1, &g_mem.triangle_vao);
@@ -209,6 +216,7 @@ export fn game_hot_reload(init_memory: ?*anyopaque, gmemory: ?*anyopaque) void {
     if (init_memory) |init_mem| {
         g_init = @alignCast(@ptrCast(init_mem));
         g_init_exists = true;
+        loadGL();
     }
     if (gmemory) |gmem| {
         g_mem = @alignCast(@ptrCast(gmem));
