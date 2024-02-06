@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("c.zig");
 const builtin = @import("builtin");
+const fs_utils = @import("fs/utils.zig");
 
 const game_lib_basename = "learnopengl";
 const game_lib_name: [:0]const u8 = builtin.target.libPrefix() ++ game_lib_basename ++ builtin.target.dynamicLibSuffix();
@@ -16,7 +17,7 @@ pub fn main() !void {
 
     const game_lib_path = try getGameLibPath(allocator);
 
-    var modified = try getFileModifiedZ(game_lib_path);
+    var modified = try fs_utils.getFileModifiedZ(game_lib_path);
     game_api = try loadGameAPI(allocator, game_lib_path);
 
     game_api.game_init_window(&allocator);
@@ -32,7 +33,7 @@ pub fn main() !void {
     while (!exit) {
         _ = arena.reset(.retain_capacity);
 
-        const new_modified = try getFileModifiedZ(game_lib_path);
+        const new_modified = try fs_utils.getFileModifiedZ(game_lib_path);
 
         if (new_modified != modified) {
             modified = new_modified;
@@ -75,14 +76,6 @@ pub fn main() !void {
 
         exit = !game_api.game_update();
     }
-}
-
-fn getFileModifiedZ(path: [:0]const u8) !i128 {
-    var lib_file = try std.fs.openFileAbsoluteZ(path, .{});
-    defer lib_file.close();
-    var lib_file_meta = try lib_file.metadata();
-
-    return lib_file_meta.modified();
 }
 
 fn getGameLibPath(allocator: std.mem.Allocator) ![:0]const u8 {
