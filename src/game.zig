@@ -6,6 +6,7 @@ const formats = @import("formats.zig");
 const zlm = @import("zlm");
 const Vec3 = zlm.Vec3;
 const Mat4 = zlm.Mat4;
+const a = @import("asset_manifest.zig");
 
 const FRAME_ARENA_SIZE = 1024 * 1024 * 512;
 
@@ -172,10 +173,10 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, @sizeOf(f32) * 3, @ptrFromInt(0));
     gl.enableVertexAttribArray(0);
 
-    g_mem.shader_program = g_assets.loadShaderProgram(.{ .vertex = "src/shaders/vert.glsl", .fragment = "src/shaders/frag.glsl" });
+    g_mem.shader_program = g_assets.loadShaderProgram(.{ .vertex = "assets/shaders/vert.glsl", .fragment = "assets/shaders/frag.glsl" });
 
     // MESH PROGRAM
-    g_mem.mesh_program = g_assets.loadShaderProgram(.{ .vertex = "src/shaders/mesh.vert.glsl", .fragment = "src/shaders/mesh.frag.glsl" });
+    g_mem.mesh_program = g_assets.loadShaderProgram(.{ .vertex = "assets/shaders/mesh.vert.glsl", .fragment = "assets/shaders/mesh.frag.glsl" });
     const mesh_program_name = g_mem.mesh_program.resolve(g_assets);
 
     gl.uniformBlockBinding(mesh_program_name, 0, UBO.CameraMatrices.value());
@@ -200,7 +201,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
     // MESH ITSELF
     // TODO: asset paths relative to exe
-    g_mem.mesh = g_assets.loadMesh("zig-out/assets/bunny.mesh");
+    g_mem.mesh = a.Meshes.bunny;
 
     var camera_ubo: gl.GLuint = 0;
     gl.createBuffers(1, &camera_ubo);
@@ -275,7 +276,7 @@ export fn game_update() bool {
     // gl.fenceSync(_condition: GLenum, _flags: GLbitfield)
     camera_matrix.* = .{
         .projection = Mat4.createPerspective(
-            std.math.degreesToRadians(f32, 20), //fov
+            std.math.degreesToRadians(f32, 30),
             f_width / f_height,
             0.1,
             100.0,

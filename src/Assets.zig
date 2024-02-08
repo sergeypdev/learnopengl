@@ -1,7 +1,24 @@
+// TODO:
+// - Don't allocate asset ids dynamically
+// - Store asset memory usage on CPU and GPU
+// - Use LRU to evict unused assets based on available memory
+//   (if we have enough memory never free, lol)
+//
+// NOTE: 1
+//   Renderer/Game code will touch assets each time they are used
+//   so LRU should work pretty well I think and I don't have to retain asset ids
+//   since they'll be pre-generated constants.
+//
+// NOTE: 2
+//   It makes hot reloading easier because it eliminates load*() calls completely
+//   Because each time an asset is used it's touched by using code, hot reload in asset
+//   server only needs to free assets and not actually reload them, cause they'll be reloaded
+//   next time they're used
 const std = @import("std");
 const gl = @import("gl.zig");
 const fs_utils = @import("fs/utils.zig");
 const formats = @import("formats.zig");
+const asset_manifest = @import("asset_manifest.zig");
 
 pub const Assets = @This();
 
@@ -35,15 +52,17 @@ pub const Handle = struct {
         id: AssetId = 0,
 
         // Returns a VAO
-        pub fn resolve(self: Mesh, assets: *Assets) *LoadedMesh {
-            const asset = assets.loaded_assets.getPtr(self.id) orelse unreachable;
-
-            switch (asset.*) {
-                .mesh => |*mesh| {
-                    return mesh;
-                },
-                else => unreachable,
+        pub fn resolve(self: Mesh, assets: *Assets) *const LoadedMesh {
+            if (assets.loaded_assets.getPtr(self.id)) |asset| {
+                switch (asset.*) {
+                    .mesh => |*mesh| {
+                        return mesh;
+                    },
+                    else => unreachable,
+                }
             }
+
+            return loadMesh(assets, self.id);
         }
     };
 };
@@ -51,15 +70,22 @@ pub const Handle = struct {
 allocator: std.mem.Allocator,
 frame_arena: std.mem.Allocator,
 
+// All assets are relative to exe dir
+exe_dir: std.fs.Dir,
+
 loaded_assets: std.AutoHashMapUnmanaged(AssetId, LoadedAsset) = .{},
 
-// NOTE: asset id 0 - invalid asset
-next_id: AssetId = 1,
+next_id: AssetId = 10,
 
 pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator) Assets {
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const exe_dir_path = std.fs.selfExeDirPath(&buf) catch @panic("can't find self exe dir path");
+    const exe_dir = std.fs.openDirAbsolute(exe_dir_path, .{}) catch @panic("can't open self exe dir path");
+
     return .{
         .allocator = allocator,
         .frame_arena = frame_arena,
+        .exe_dir = exe_dir,
     };
 }
 
@@ -73,12 +99,12 @@ pub fn watchChanges(self: *Assets) void {
     while (iter.next()) |entry| {
         switch (entry.value_ptr.*) {
             .shaderProgram => |*shader| {
-                if (didUpdate(shader.definition.vertex, &shader.vert_modified) or didUpdate(shader.definition.fragment, &shader.frag_modified)) {
+                if (self.didUpdate(shader.definition.vertex, &shader.vert_modified) or self.didUpdate(shader.definition.fragment, &shader.frag_modified)) {
                     self.reloadAsset(entry.key_ptr.*);
                 }
             },
             .mesh => |*mesh| {
-                if (didUpdate(mesh.path, &mesh.modified)) {
+                if (self.didUpdate(asset_manifest.getPath(entry.key_ptr.*), &mesh.modified)) {
                     self.reloadAsset(entry.key_ptr.*);
                 }
             },
@@ -86,8 +112,8 @@ pub fn watchChanges(self: *Assets) void {
     }
 }
 
-fn didUpdate(path: []const u8, last_modified: *i128) bool {
-    const mod = fs_utils.getFileModifiedRelative(path) catch |err| {
+fn didUpdate(self: *Assets, path: []const u8, last_modified: *i128) bool {
+    const mod = fs_utils.getFileModifiedRelative(self.exe_dir, path) catch |err| {
         std.log.err("ERROR: {}\nfailed to check file modtime {s}\n", .{ err, path });
         return false;
     };
@@ -105,8 +131,11 @@ pub fn reloadAsset(self: *Assets, asset_id: AssetId) void {
                 std.log.err("Failed to reload shader program {}\n", .{err});
             };
         },
-        .mesh => |*mesh| {
-            _ = self.loadMeshErr(mesh.path) catch |err| {
+        .mesh => {
+            std.log.debug("reloading mesh {s}\n", .{asset_manifest.getPath(asset_id)});
+            _ = self.loadMeshErr(
+                asset_id,
+            ) catch |err| {
                 std.log.err("Fauled to reload mesh {}\n", .{err});
             };
         },
@@ -126,8 +155,8 @@ pub fn loadShaderProgram(self: *Assets, params: ShaderProgramDefinition) Handle.
 
         return .{ .id = 0 };
     };
-
-    const id = self.putLoadedAsset(.{
+    const id = self.nextId();
+    self.loaded_assets.put(self.allocator, id, .{
         .shaderProgram = .{
             .definition = .{
                 .vertex = self.allocator.dupe(u8, params.vertex) catch @panic("OOM"),
@@ -143,11 +172,11 @@ pub fn loadShaderProgram(self: *Assets, params: ShaderProgramDefinition) Handle.
 }
 
 fn loadShaderProgramErr(self: *Assets, prog: gl.GLuint, params: ShaderProgramDefinition) !struct { vert_modified: i128, frag_modified: i128 } {
-    const vertex_file = try loadFile(self.frame_arena, params.vertex, SHADER_MAX_BYTES);
+    const vertex_file = try self.loadFile(self.frame_arena, params.vertex, SHADER_MAX_BYTES);
     const vertex_shader = try loadShader(self.frame_arena, .vertex, vertex_file.bytes);
     defer gl.deleteShader(vertex_shader);
 
-    const fragment_file = try loadFile(self.frame_arena, params.fragment, SHADER_MAX_BYTES);
+    const fragment_file = try self.loadFile(self.frame_arena, params.fragment, SHADER_MAX_BYTES);
     const fragment_shader = try loadShader(self.frame_arena, .fragment, fragment_file.bytes);
     defer gl.deleteShader(fragment_shader);
 
@@ -178,18 +207,37 @@ fn loadShaderProgramErr(self: *Assets, prog: gl.GLuint, params: ShaderProgramDef
     return .{ .vert_modified = vertex_file.modified, .frag_modified = fragment_file.modified };
 }
 
-pub fn loadMesh(self: *Assets, path: []const u8) Handle.Mesh {
-    const id = self.loadMeshErr(path) catch |err| {
-        std.log.err("Error: {} loading mesh at path: {s}", .{ err, path });
-        return .{ .id = 0 };
-    };
+const NullMesh = LoadedMesh{
+    .modified = 0,
 
-    return .{ .id = id };
+    .positions = BufferSlice{
+        .buffer = 0,
+        .offset = 0,
+        .stride = 0,
+    },
+    .normals = BufferSlice{
+        .buffer = 0,
+        .offset = 0,
+        .stride = 0,
+    },
+    .indices = IndexSlice{
+        .buffer = 0,
+        .offset = 0,
+        .count = 0,
+        .type = gl.UNSIGNED_SHORT,
+    },
+};
+
+pub fn loadMesh(self: *Assets, id: AssetId) *const LoadedMesh {
+    return self.loadMeshErr(id) catch |err| {
+        std.log.err("Error: {} loading mesh at path: {s}", .{ err, asset_manifest.getPath(id) });
+        return &NullMesh;
+    };
 }
 
-fn loadMeshErr(self: *Assets, path: []const u8) !AssetId {
-    const data = try loadFile(self.frame_arena, path, MESH_MAX_BYTES);
-
+fn loadMeshErr(self: *Assets, id: AssetId) !*const LoadedMesh {
+    const path = asset_manifest.getPath(id);
+    const data = try self.loadFile(self.frame_arena, path, MESH_MAX_BYTES);
     const mesh = formats.Mesh.fromBuffer(data.bytes);
 
     var bufs = [_]gl.GLuint{ 0, 0, 0 };
@@ -225,7 +273,6 @@ fn loadMeshErr(self: *Assets, path: []const u8) !AssetId {
     // gl.bindVertexBuffer(_bindingindex: GLuint, _buffer: GLuint, _offset: GLintptr, _stride: GLsizei)
 
     const loaded_mesh = LoadedMesh{
-        .path = try self.allocator.dupe(u8, path),
         .modified = data.modified,
 
         .positions = .{
@@ -246,14 +293,13 @@ fn loadMeshErr(self: *Assets, path: []const u8) !AssetId {
         },
     };
 
-    return try self.putLoadedAsset(.{ .mesh = loaded_mesh });
+    try self.loaded_assets.put(self.allocator, id, .{ .mesh = loaded_mesh });
+    return @ptrCast(&self.loaded_assets.getPtr(id).?.mesh);
 }
 
-fn putLoadedAsset(self: *Assets, asset: LoadedAsset) !AssetId {
+fn nextId(self: *Assets) AssetId {
     const id = self.next_id;
     self.next_id += 1;
-
-    try self.loaded_assets.put(self.allocator, id, asset);
 
     return id;
 }
@@ -272,7 +318,6 @@ const LoadedShaderProgram = struct {
 };
 
 const LoadedMesh = struct {
-    path: []const u8,
     modified: i128,
 
     positions: BufferSlice,
@@ -285,7 +330,7 @@ pub const BufferSlice = struct {
     offset: gl.GLintptr,
     stride: gl.GLsizei,
 
-    pub fn bind(self: *BufferSlice, index: gl.GLuint) void {
+    pub fn bind(self: *const BufferSlice, index: gl.GLuint) void {
         gl.bindVertexBuffer(index, self.buffer, self.offset, self.stride);
     }
 };
@@ -318,8 +363,9 @@ const AssetData = struct {
     bytes: []u8,
     modified: i128,
 };
-fn loadFile(allocator: std.mem.Allocator, path: []const u8, max_size: usize) !AssetData {
-    const file = try std.fs.cwd().openFile(path, .{});
+
+fn loadFile(self: *Assets, allocator: std.mem.Allocator, path: []const u8, max_size: usize) !AssetData {
+    const file = try self.exe_dir.openFile(path, .{});
     defer file.close();
     const meta = try file.metadata();
     const bytes = try file.reader().readAllAlloc(allocator, max_size);

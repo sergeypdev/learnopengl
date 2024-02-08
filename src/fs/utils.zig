@@ -1,7 +1,7 @@
 const std = @import("std");
 
-pub fn getFileModifiedRelative(path: []const u8) !i128 {
-    var lib_file = try std.fs.cwd().openFile(path, .{});
+pub fn getFileModifiedRelative(dir: std.fs.Dir, path: []const u8) !i128 {
+    var lib_file = try dir.openFile(path, .{});
     defer lib_file.close();
     var lib_file_meta = try lib_file.metadata();
 
