@@ -35,3 +35,4 @@ pub const asset_path_to_asset_id = std.ComptimeStringMap(u32, .{
     .{ "assets\\shaders\\mesh.vert.glsl", 5 },
     .{ "assets\\shaders\\vert.glsl", 6 },
 });
+

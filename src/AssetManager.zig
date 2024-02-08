@@ -107,9 +107,11 @@ pub fn watchChanges(self: *AssetManager) void {
     var iter = self.loaded_assets.iterator();
     while (iter.next()) |entry| {
         const gop = self.modified_times.getOrPut(self.allocator, entry.key_ptr.*) catch return;
+        if (!gop.found_existing) {
+            gop.value_ptr.* = 0;
+        }
         if (self.didUpdate(asset_manifest.getPath(entry.key_ptr.*), gop.value_ptr)) {
-            // self.dependees.get
-            // self.reloadAsset(entry.key_ptr.*);
+            self.unloadAssetWithDependees(entry.key_ptr.*);
         }
     }
 }
@@ -390,4 +392,38 @@ fn addDependencies(self: *AssetManager, id: AssetId, dependencies: []const Asset
         }
         try gop.value_ptr.append(self.allocator, id);
     }
+}
+
+fn deleteDependees(self: *AssetManager, id: AssetId) void {
+    const dependees = self.dependees.getPtr(id) orelse return;
+
+    var iter = dependees.iterator(0);
+
+    while (iter.next()) |dep| {
+        self.unloadAssetWithDependees(dep.*);
+    }
+}
+
+fn unloadAssetWithDependees(self: *AssetManager, id: AssetId) void {
+    self.deleteDependees(id);
+
+    {
+        const asset = self.loaded_assets.getPtr(id) orelse return;
+
+        switch (asset.*) {
+            .mesh => |*mesh| {
+                gl.deleteBuffers(3, &[_]gl.GLuint{ mesh.positions.buffer, mesh.normals.buffer, mesh.indices.buffer });
+            },
+            .shader => |*shader| {
+                gl.deleteShader(shader.shader);
+            },
+            .shaderProgram => |*program| {
+                gl.deleteProgram(program.program);
+            },
+        }
+    }
+    _ = self.loaded_assets.remove(id);
+
+    _ = self.dependees.remove(id);
+    _ = self.dependencies.remove(id);
 }
