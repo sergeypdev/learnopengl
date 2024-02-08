@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const Handle = @import("assets").Handle;
 
 pub const native_endian = builtin.cpu.arch.endian();
 
@@ -66,6 +67,20 @@ pub fn writeMesh(writer: anytype, value: Mesh, endian: std.builtin.Endian) !void
     for (value.indices) |i| {
         try writer.writeInt(Index, i, endian);
     }
+}
+
+pub const ShaderProgram = extern struct {
+    vertex: Handle.Shader,
+    fragment: Handle.Shader,
+
+    pub fn fromBuffer(buf: []u8) *align(1) ShaderProgram {
+        return @ptrCast(buf);
+    }
+};
+
+pub fn writeShaderProgram(writer: anytype, vertex: u32, fragment: u32, endian: std.builtin.Endian) !void {
+    try writer.writeInt(u32, vertex, endian);
+    try writer.writeInt(u32, fragment, endian);
 }
 
 fn writeVector3(writer: anytype, value: Vector3, endian: std.builtin.Endian) !void {

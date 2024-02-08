@@ -22,10 +22,16 @@ pub fn build(b: *Build) void {
         "Prioritize performance, safety, or binary size for build time tools",
     ) orelse .Debug;
 
+    const assets_mod = b.addModule("assets", .{ .root_source_file = .{ .path = "src/assets/root.zig" } });
+    const asset_manifest_mod = b.addModule("asset_manifest", .{ .root_source_file = .{ .path = "src/gen/asset_manifest.zig" } });
+    asset_manifest_mod.addImport("assets", assets_mod);
+
     const assets_step = b.step("assets", "Build and install assets");
     b.getInstallStep().dependOn(assets_step);
 
     const assetc = buildAssetCompiler(b, buildOptimize);
+    assetc.root_module.addImport("assets", assets_mod);
+    assetc.root_module.addImport("asset_manifest", asset_manifest_mod);
 
     buildAssets(b, assets_step, assetc, "assets") catch |err| {
         std.log.err("Failed to build assets {}\n", .{err});
@@ -49,6 +55,8 @@ pub fn build(b: *Build) void {
 
     lib.linkLibrary(sdl2);
     lib.root_module.addImport("zlm", zlm_dep.module("zlm"));
+    lib.root_module.addImport("assets", assets_mod);
+    lib.root_module.addImport("asset_manifest", asset_manifest_mod);
 
     const install_lib = b.addInstallArtifact(lib, .{ .dest_dir = .{ .override = .prefix } });
     b.getInstallStep().dependOn(&install_lib.step);
@@ -120,7 +128,7 @@ pub fn build(b: *Build) void {
 }
 
 const NestedAssetDef = union(enum) {
-    path: std.StringHashMapUnmanaged(NestedAssetDef),
+    path: std.StringArrayHashMapUnmanaged(NestedAssetDef),
     asset: usize,
 
     pub fn put(self: *NestedAssetDef, allocator: std.mem.Allocator, path: []const u8, id: usize) !void {
@@ -135,7 +143,9 @@ const NestedAssetDef = union(enum) {
         while (iter.next()) |comp| {
             if (comp.name.ptr == filename.ptr) break;
             const gop = try current.getOrPut(allocator, comp.name);
-            gop.value_ptr.* = NestedAssetDef{ .path = .{} };
+            if (!gop.found_existing) {
+                gop.value_ptr.* = NestedAssetDef{ .path = .{} };
+            }
             current = &gop.value_ptr.path;
         }
 
@@ -159,6 +169,8 @@ fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const 
 
     var asset_id: usize = 1; // Start at 1 because asset id 0 = null asset
     var meshes = NestedAssetDef{ .path = .{} };
+    var shaders = NestedAssetDef{ .path = .{} };
+    var shader_programs = NestedAssetDef{ .path = .{} };
     var asset_paths = std.ArrayList([]const u8).init(b.allocator);
 
     var walker = try assetsDir.walk(b.allocator);
@@ -176,8 +188,8 @@ fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const 
             const compiled_file = run_assetc.addOutputFileArg(out_name);
 
             const out_path = b.pathJoin(&.{
-                std.fs.path.dirname(entry.path) orelse ".",
                 path,
+                std.fs.path.dirname(entry.path) orelse "",
                 out_name,
             });
             const install_asset = b.addInstallFileWithDir(
@@ -202,10 +214,43 @@ fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const 
             });
             const install_shader = b.addInstallFileWithDir(.{ .path = out_path }, .prefix, out_path);
             step.dependOn(&install_shader.step);
+
+            {
+                const id = asset_id;
+                asset_id += 1;
+                try shaders.put(b.allocator, out_path, id);
+                try asset_paths.append(out_path);
+            }
+        }
+
+        // Shader program
+        if (std.mem.endsWith(u8, entry.basename, ".prog")) {
+            const run_assetc = b.addRunArtifact(assetc);
+            run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
+            const compiled_file = run_assetc.addOutputFileArg(b.dupe(entry.basename));
+
+            const out_path = b.pathJoin(&.{
+                path,
+                entry.path,
+            });
+            const install_asset = b.addInstallFileWithDir(
+                compiled_file,
+                .prefix,
+                out_path,
+            );
+            step.dependOn(&install_asset.step);
+
+            {
+                const id = asset_id;
+                asset_id += 1;
+                try shader_programs.put(b.allocator, out_path, id);
+                try asset_paths.append(out_path);
+            }
         }
     }
 
-    const manifest_step = try writeAssetManifest(b, step, asset_paths.items, &meshes);
+    const manifest_step = try writeAssetManifest(b, step, asset_paths.items, &meshes, &shaders, &shader_programs);
+
     assetc.step.dependOn(&manifest_step.step);
 }
 
@@ -229,26 +274,44 @@ fn writeNestedAssetDef(writer: anytype, handle: []const u8, name: []const u8, as
     }
 }
 
-fn writeAssetManifest(b: *Build, asset_step: *Step, asset_paths: [][]const u8, meshes: *NestedAssetDef) !*Step.WriteFile {
+fn writeAssetManifest(
+    b: *Build,
+    asset_step: *Step,
+    asset_paths: [][]const u8,
+    meshes: *NestedAssetDef,
+    shaders: *NestedAssetDef,
+    shader_programs: *NestedAssetDef,
+) !*Step.WriteFile {
     var mesh_asset_manifest = std.ArrayList(u8).init(b.allocator);
     const writer = mesh_asset_manifest.writer();
 
     try writer.writeAll("// Generated file, do not edit manually!\n\n");
-    try writer.writeAll("const Handle = @import(\"Assets.zig\").Handle;\n\n");
+    try writer.writeAll("const std = @import(\"std\");\n");
+    // TODO: import AssetId instead of harcoding u32s
+    try writer.writeAll("const Handle = @import(\"assets\").Handle;\n\n");
 
     try writeNestedAssetDef(writer, "Mesh", "Meshes", meshes, 0);
+    try writer.writeByte('\n');
+    try writeNestedAssetDef(writer, "Shader", "Shaders", shaders, 0);
+    try writer.writeByte('\n');
+    try writeNestedAssetDef(writer, "ShaderProgram", "ShaderPrograms", shader_programs, 0);
+    try writer.writeByte('\n');
 
     try writer.writeAll("pub const asset_paths = [_][]const u8{\n");
     for (asset_paths) |path| {
         try std.fmt.format(writer, "    \"{}\",\n", .{std.zig.fmtEscapes(path)});
     }
-    try writer.writeAll("};\n");
+    try writer.writeAll("};\n\n");
 
-    try writer.writeAll("pub fn getPath(asset_id: u32) []const u8 { return asset_paths[asset_id - 1]; }\n");
+    try writer.writeAll("pub const asset_path_to_asset_id = std.ComptimeStringMap(u32, .{\n");
+    for (asset_paths, 0..) |path, i| {
+        try std.fmt.format(writer, "    .{{ \"{}\", {} }},\n", .{ std.zig.fmtEscapes(path), i + 1 });
+    }
+    try writer.writeAll("});\n\n");
 
     const result = mesh_asset_manifest.toOwnedSlice() catch @panic("OOM");
     const write_step = b.addWriteFiles();
-    write_step.addBytesToSource(result, "src/asset_manifest.zig");
+    write_step.addBytesToSource(result, "src/gen/asset_manifest.gen.zig");
     asset_step.dependOn(&write_step.step);
     return write_step;
 }

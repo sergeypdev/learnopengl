@@ -1,12 +1,12 @@
 const std = @import("std");
 const c = @import("c.zig");
 const gl = @import("gl.zig");
-const Assets = @import("Assets.zig");
+const AssetManager = @import("AssetManager.zig");
 const formats = @import("formats.zig");
 const zlm = @import("zlm");
 const Vec3 = zlm.Vec3;
 const Mat4 = zlm.Mat4;
-const a = @import("asset_manifest.zig");
+const a = @import("asset_manifest");
 
 const FRAME_ARENA_SIZE = 1024 * 1024 * 512;
 
@@ -41,14 +41,11 @@ pub const InitMemory = struct {
 pub const GameMemory = struct {
     global_allocator: std.mem.Allocator,
     frame_fba: std.heap.FixedBufferAllocator,
-    assets: Assets,
+    assetman: AssetManager,
     counter: i32 = 0,
     triangle_vao: gl.GLuint = 0,
     triangle_vbo: gl.GLuint = 0,
-    shader_program: Assets.Handle.ShaderProgram = .{},
-    mesh_program: Assets.Handle.ShaderProgram = .{},
     mesh_vao: gl.GLuint = 0,
-    mesh: Assets.Handle.Mesh = .{},
     camera_ubo: gl.GLuint = 0,
     camera_matrices: []CameraMatrices,
     current_camera_matrix: usize = 0,
@@ -58,7 +55,7 @@ pub const GameMemory = struct {
 var g_init_exists = false;
 var g_init: *InitMemory = undefined;
 var g_mem: *GameMemory = undefined;
-var g_assets: *Assets = undefined;
+var g_assetman: *AssetManager = undefined;
 
 fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
     try sdl_try(c.SDL_Init(c.SDL_INIT_EVERYTHING));
@@ -140,17 +137,19 @@ fn checkError() void {
     }
 }
 
+const mesh_program = a.ShaderPrograms.mesh;
+
 export fn game_init(global_allocator: *std.mem.Allocator) void {
     std.log.debug("game_init\n", .{});
     g_mem = global_allocator.create(GameMemory) catch @panic("OOM");
     const frame_arena_buffer = global_allocator.alloc(u8, FRAME_ARENA_SIZE) catch @panic("OOM");
     g_mem.global_allocator = global_allocator.*;
     g_mem.frame_fba = std.heap.FixedBufferAllocator.init(frame_arena_buffer);
-    g_mem.assets = Assets.init(
+    g_mem.assetman = AssetManager.init(
         global_allocator.*,
         g_mem.frame_fba.allocator(),
     );
-    g_assets = &g_mem.assets;
+    g_assetman = &g_mem.assetman;
 
     loadGL();
 
@@ -173,11 +172,8 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, @sizeOf(f32) * 3, @ptrFromInt(0));
     gl.enableVertexAttribArray(0);
 
-    g_mem.shader_program = g_assets.loadShaderProgram(.{ .vertex = "assets/shaders/vert.glsl", .fragment = "assets/shaders/frag.glsl" });
-
     // MESH PROGRAM
-    g_mem.mesh_program = g_assets.loadShaderProgram(.{ .vertex = "assets/shaders/mesh.vert.glsl", .fragment = "assets/shaders/mesh.frag.glsl" });
-    const mesh_program_name = g_mem.mesh_program.resolve(g_assets);
+    const mesh_program_name = g_assetman.resolveShaderProgram(mesh_program).program;
 
     gl.uniformBlockBinding(mesh_program_name, 0, UBO.CameraMatrices.value());
 
@@ -198,10 +194,6 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     gl.vertexArrayAttribBinding(vao, Attrib.Normal.value(), 1);
     gl.vertexArrayAttribFormat(vao, Attrib.Normal.value(), 3, gl.FLOAT, gl.FALSE, 0);
     gl.enableVertexArrayAttrib(vao, Attrib.Normal.value());
-
-    // MESH ITSELF
-    // TODO: asset paths relative to exe
-    g_mem.mesh = a.Meshes.bunny;
 
     var camera_ubo: gl.GLuint = 0;
     gl.createBuffers(1, &camera_ubo);
@@ -293,7 +285,7 @@ export fn game_update() bool {
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    gl.useProgram(g_mem.mesh_program.resolve(g_assets));
+    gl.useProgram(g_assetman.resolveShaderProgram(a.ShaderPrograms.mesh).program);
     gl.bindVertexArray(g_mem.mesh_vao);
 
     gl.bindBufferRange(
@@ -306,7 +298,7 @@ export fn game_update() bool {
     g_mem.rotation += 0.001;
     gl.uniformMatrix4fv(1, 1, gl.FALSE, @ptrCast(&Mat4.createAngleAxis(Vec3.unitY, g_mem.rotation).fields));
 
-    const mesh = g_mem.mesh.resolve(g_assets);
+    const mesh = g_assetman.resolveMesh(a.Meshes.bunny);
     mesh.positions.bind(Attrib.Position.value());
     mesh.normals.bind(Attrib.Normal.value());
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
@@ -320,7 +312,7 @@ export fn game_update() bool {
     c.SDL_GL_SwapWindow(g_init.window);
     c.SDL_Delay(1);
 
-    g_assets.watchChanges();
+    g_assetman.watchChanges();
 
     return true;
 }
@@ -349,7 +341,7 @@ export fn game_hot_reload(init_memory: ?*anyopaque, gmemory: ?*anyopaque) void {
     }
     if (gmemory) |gmem| {
         g_mem = @alignCast(@ptrCast(gmem));
-        g_assets = &g_mem.assets;
+        g_assetman = &g_mem.assetman;
     }
     if (g_init_exists) {
         c.SDL_RaiseWindow(g_init.window);

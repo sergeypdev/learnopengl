@@ -1,0 +1,4 @@
+{
+  "vertex": "mesh.vert.glsl",
+  "fragment": "mesh.frag.glsl"
+}
