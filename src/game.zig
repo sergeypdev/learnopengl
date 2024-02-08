@@ -42,9 +42,6 @@ pub const GameMemory = struct {
     global_allocator: std.mem.Allocator,
     frame_fba: std.heap.FixedBufferAllocator,
     assetman: AssetManager,
-    counter: i32 = 0,
-    triangle_vao: gl.GLuint = 0,
-    triangle_vbo: gl.GLuint = 0,
     mesh_vao: gl.GLuint = 0,
     camera_ubo: gl.GLuint = 0,
     camera_matrices: []CameraMatrices,
@@ -161,17 +158,6 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
     gl.viewport(0, 0, g_init.width, g_init.height);
 
-    // Triangle
-    gl.genBuffers(1, &g_mem.triangle_vbo);
-    gl.genVertexArrays(1, &g_mem.triangle_vao);
-
-    gl.bindVertexArray(g_mem.triangle_vao);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, g_mem.triangle_vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, @sizeOf(@TypeOf(vertices)), &vertices, gl.STATIC_DRAW);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, @sizeOf(f32) * 3, @ptrFromInt(0));
-    gl.enableVertexAttribArray(0);
-
     // MESH PROGRAM
     const mesh_program_name = g_assetman.resolveShaderProgram(mesh_program).program;
 
@@ -221,14 +207,6 @@ const CameraMatrices = extern struct {
     view: zlm.Mat4,
 };
 
-const vertex_shader_code = @embedFile("shaders/vert.glsl");
-const fragment_shader_code = @embedFile("shaders/frag.glsl");
-const vertices = [_]f32{
-    -0.5, -0.5, 0.0,
-    0.5,  -0.5, 0.0,
-    0,    0.5,  0.0,
-};
-
 export fn game_update() bool {
     g_mem.frame_fba.reset();
     var event: c.SDL_Event = undefined;
@@ -258,7 +236,6 @@ export fn game_update() bool {
             else => {},
         }
     }
-    g_mem.counter += 1;
 
     const f_width: f32 = @floatFromInt(g_init.width);
     const f_height: f32 = @floatFromInt(g_init.height);
