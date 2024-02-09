@@ -18,6 +18,7 @@
         .SDL = .{
             .url = "https://github.com/sergeypdev/SDL/tarball/b23c0ba880c53e5e98c57d2d5470c8d551a520b3",
             .hash = "122080136ee910b4bec7be16e6c69cf1e7fc4f69d14f4d7d2dd1bba3c3fe30e489a3",
+            .lazy = true,
         },
         .@"zig-assimp" = .{
             .url = "https://github.com/sergeypdev/zig-assimp/tarball/64b31e9c01132352246955f496642332cb611577",

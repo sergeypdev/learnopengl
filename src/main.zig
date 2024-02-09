@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("c.zig");
+const sdl = @import("sdl.zig");
 const builtin = @import("builtin");
 const fs_utils = @import("fs/utils.zig");
 
@@ -8,8 +8,11 @@ const game_lib_name: [:0]const u8 = builtin.target.libPrefix() ++ game_lib_basen
 
 var game_api: GameAPI = undefined;
 
+// pub extern "winmm" fn timeBeginPeriod(period: c_uint) c_uint;
+
 pub fn main() !void {
-    var global_alloc = std.heap.LoggingAllocator(.debug, .err).init(std.heap.c_allocator);
+    // _ = timeBeginPeriod(1);
+    var global_alloc = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = global_alloc.allocator();
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const temp_allocator = arena.allocator();
@@ -79,7 +82,7 @@ pub fn main() !void {
 }
 
 fn getGameLibPath(allocator: std.mem.Allocator) ![:0]const u8 {
-    const base_path = std.mem.span(c.SDL_GetBasePath());
+    const base_path = std.mem.span(sdl.SDL_GetBasePath());
     const game_lib_path = try std.fs.path.joinZ(allocator, &.{ base_path, game_lib_name });
 
     return game_lib_path;
@@ -89,7 +92,7 @@ var game_version: usize = 0;
 
 fn loadGameAPI(arena: std.mem.Allocator, game_lib_path: [:0]const u8) !GameAPI {
     game_version += 1;
-    const base_path = std.mem.span(c.SDL_GetBasePath());
+    const base_path = std.mem.span(sdl.SDL_GetBasePath());
     const temp_lib_name = try std.fmt.allocPrintZ(
         arena,
         builtin.target.libPrefix() ++ "{s}_{}" ++ builtin.target.dynamicLibSuffix(),
@@ -100,10 +103,10 @@ fn loadGameAPI(arena: std.mem.Allocator, game_lib_path: [:0]const u8) !GameAPI {
     try std.fs.copyFileAbsolute(game_lib_path, temp_lib_path, .{});
 
     std.log.debug("Loading game lib at path {s}\n", .{temp_lib_path});
-    const dll = c.SDL_LoadObject(temp_lib_path);
+    const dll = sdl.SDL_LoadObject(temp_lib_path);
 
     if (dll == null) {
-        std.log.debug("SDL Error: {s}", .{c.SDL_GetError()});
+        std.log.debug("SDL Error: {s}", .{sdl.SDL_GetError()});
         return error.SDLDLLLoadFailed;
     }
 
@@ -126,23 +129,23 @@ const GameAPI = struct {
 
     pub fn init(dll: ?*anyopaque, path: [:0]const u8) !GameAPI {
         return GameAPI{
-            .game_init_window = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_init_window") orelse return error.MissingGameInitWindow)),
-            .game_init = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_init") orelse return error.MissingGameInit)),
-            .game_update = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_update") orelse return error.MissingGameUpdate)),
-            .game_shutdown = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_shutdown") orelse return error.MissingGameShutdown)),
-            .game_shutdown_window = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_shutdown_window") orelse return error.MissingGameShutdownWindow)),
-            .game_memory_size = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_memory_size") orelse return error.MissingGameMemorySize)),
-            .game_init_memory_size = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_init_memory_size") orelse return error.MissingGameInitMemorySize)),
-            .game_memory = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_memory") orelse return error.MissingGameMemory)),
-            .game_init_memory = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_init_memory") orelse return error.MissingGameInitMemory)),
-            .game_hot_reload = @alignCast(@ptrCast(c.SDL_LoadFunction(dll, "game_hot_reload") orelse return error.MissingGameHotReload)),
+            .game_init_window = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_init_window") orelse return error.MissingGameInitWindow)),
+            .game_init = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_init") orelse return error.MissingGameInit)),
+            .game_update = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_update") orelse return error.MissingGameUpdate)),
+            .game_shutdown = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_shutdown") orelse return error.MissingGameShutdown)),
+            .game_shutdown_window = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_shutdown_window") orelse return error.MissingGameShutdownWindow)),
+            .game_memory_size = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_memory_size") orelse return error.MissingGameMemorySize)),
+            .game_init_memory_size = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_init_memory_size") orelse return error.MissingGameInitMemorySize)),
+            .game_memory = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_memory") orelse return error.MissingGameMemory)),
+            .game_init_memory = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_init_memory") orelse return error.MissingGameInitMemory)),
+            .game_hot_reload = @alignCast(@ptrCast(sdl.SDL_LoadFunction(dll, "game_hot_reload") orelse return error.MissingGameHotReload)),
             .dll = dll,
             .path = path,
         };
     }
 
     pub fn deinit(self: *GameAPI, allocator: std.mem.Allocator) void {
-        c.SDL_UnloadObject(self.dll);
+        sdl.SDL_UnloadObject(self.dll);
         std.fs.deleteFileAbsolute(self.path) catch |err| {
             std.log.debug("failed to delete temp game dll {}", .{err});
         };

@@ -38,12 +38,6 @@ pub fn build(b: *Build) void {
         @panic("buildAssets");
     };
 
-    const sdl_dep = b.dependency("SDL", .{
-        .target = target,
-        .optimize = .ReleaseSafe,
-    });
-    const sdl2 = sdl_dep.artifact("SDL2");
-
     const zlm_dep = b.dependency("zlm", .{});
 
     const lib = b.addSharedLibrary(.{
@@ -53,7 +47,6 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
     });
 
-    lib.linkLibrary(sdl2);
     lib.root_module.addImport("zlm", zlm_dep.module("zlm"));
     lib.root_module.addImport("assets", assets_mod);
     lib.root_module.addImport("asset_manifest", asset_manifest_mod);
@@ -70,7 +63,19 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
     });
 
-    exe.linkLibrary(sdl2);
+    if (b.systemIntegrationOption("SDL2", .{ .default = b.host.result.os.tag != .windows })) {
+        lib.linkSystemLibrary("SDL2");
+        exe.linkSystemLibrary("SDL2");
+    } else {
+        if (b.lazyDependency("SDL", .{
+            .target = target,
+            .optimize = .ReleaseSafe,
+        })) |sdl_dep| {
+            const sdl2 = sdl_dep.artifact("SDL2");
+            lib.linkLibrary(sdl2);
+            exe.linkLibrary(sdl2);
+        }
+    }
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
