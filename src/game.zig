@@ -4,9 +4,10 @@ const manymouse = @import("manymouse.zig");
 const gl = @import("gl.zig");
 const AssetManager = @import("AssetManager.zig");
 const formats = @import("formats.zig");
-const zlm = @import("zlm");
-const Vec3 = zlm.Vec3;
-const Mat4 = zlm.Mat4;
+const za = @import("zalgebra");
+const Vec2 = za.Vec2;
+const Vec3 = za.Vec3;
+const Mat4 = za.Mat4;
 const a = @import("asset_manifest");
 const windows = std.os.windows;
 
@@ -81,27 +82,27 @@ pub const InputState = packed struct {
 };
 
 pub const FreeLookCamera = struct {
-    pos: Vec3 = zlm.vec3(0, 0, -1),
+    pos: Vec3 = Vec3.new(0, 0, -1),
     pitch: f32 = 0,
     yaw: f32 = 0,
-    view_matrix: Mat4 = Mat4.identity,
+    view_matrix: Mat4 = Mat4.identity(),
 
-    pub fn update(self: *FreeLookCamera, move: zlm.Vec3, look: zlm.Vec2) void {
-        self.yaw += look.x;
-        self.pitch += look.y;
+    pub fn update(self: *FreeLookCamera, move: Vec3, look: Vec2) void {
+        self.yaw += look.x();
+        self.pitch += look.y();
         // First rotate pitch, then yaw
-        const rot = Mat4.createAngleAxis(Vec3.unitY, self.yaw).mul(Mat4.createAngleAxis(Vec3.unitX, self.pitch));
+        const rot = Mat4.fromRotation(self.pitch, Vec3.left()).mul(Mat4.fromRotation(self.yaw, Vec3.up()));
 
         // First 3 of transform matrix are: right, up, forward
-        const right = zlm.vec3(rot.fields[0][0], rot.fields[1][0], rot.fields[2][0]);
-        const up = zlm.vec3(rot.fields[0][1], rot.fields[1][1], rot.fields[2][1]);
-        const forward = zlm.vec3(rot.fields[0][2], rot.fields[1][2], rot.fields[2][2]);
+        const left = Vec3.new(rot.data[0][0], rot.data[1][0], rot.data[2][0]);
+        const up = Vec3.new(rot.data[0][1], rot.data[1][1], rot.data[2][1]);
+        const forward = Vec3.new(rot.data[0][2], rot.data[1][2], rot.data[2][2]);
 
-        const movement = right.scale(move.x).add(forward.scale(move.y)).add(up.scale(move.z));
+        const movement = left.scale(-move.x()).add(forward.scale(move.y())).add(up.scale(move.z()));
 
         self.pos = self.pos.add(movement);
 
-        self.view_matrix = Mat4.createLook(self.pos, forward, Vec3.unitY);
+        self.view_matrix = Mat4.lookAt(self.pos, self.pos.add(forward), Vec3.up());
     }
 };
 
@@ -275,8 +276,8 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
 // Should be std140
 const CameraMatrices = extern struct {
-    projection: zlm.Mat4,
-    view: zlm.Mat4,
+    projection: za.Mat4,
+    view: za.Mat4,
 };
 
 export fn game_update() bool {
@@ -285,8 +286,8 @@ export fn game_update() bool {
     g_mem.frame_fba.reset();
     var event: c.SDL_Event = undefined;
 
-    var move = zlm.Vec3.zero;
-    var look = zlm.Vec2.zero;
+    var move = Vec3.zero();
+    var look = Vec2.zero();
 
     while (c.SDL_PollEvent(&event) != 0) {
         switch (event.type) {
@@ -295,8 +296,8 @@ export fn game_update() bool {
             },
             c.SDL_MOUSEMOTION => {
                 if (g_mem.mouse_focus) {
-                    look.x += @floatFromInt(event.motion.xrel);
-                    look.y += @floatFromInt(event.motion.yrel);
+                    look.xMut().* += @floatFromInt(event.motion.xrel);
+                    look.yMut().* += @floatFromInt(event.motion.yrel);
                 }
             },
             c.SDL_MOUSEBUTTONUP => {
@@ -362,27 +363,28 @@ export fn game_update() bool {
 
     const MOVEMENT_SPEED = 0.5;
     if (g_mem.input_state.forward) {
-        move.y += 1;
+        //const y = &move.data[1];
+        move.yMut().* += 1;
     }
     if (g_mem.input_state.backward) {
-        move.y += -1;
+        move.yMut().* -= 1;
     }
     if (g_mem.input_state.left) {
-        move.x += -1;
+        move.xMut().* -= 1;
     }
     if (g_mem.input_state.right) {
-        move.x += 1;
+        move.xMut().* += 1;
     }
     if (g_mem.input_state.up) {
-        move.z += 1;
+        move.zMut().* += 1;
     }
     if (g_mem.input_state.down) {
-        move.z += -1;
+        move.zMut().* -= 1;
     }
 
     move = move.scale(MOVEMENT_SPEED * g_mem.delta_time);
 
-    g_mem.free_cam.update(move, look.scale(0.00008));
+    g_mem.free_cam.update(move, look.scale(0.008));
 
     // RENDER
     // gl.fenceSync(_condition: GLenum, _flags: GLbitfield)
@@ -393,8 +395,8 @@ export fn game_update() bool {
     const camera_matrix = &g_mem.camera_matrices[g_mem.current_camera_matrix];
 
     camera_matrix.* = .{
-        .projection = Mat4.createPerspective(
-            std.math.degreesToRadians(f32, 30),
+        .projection = Mat4.perspective(
+            30,
             f_width / f_height,
             0.1,
             100.0,
@@ -403,7 +405,6 @@ export fn game_update() bool {
     };
     gl.enable(gl.CULL_FACE);
     gl.enable(gl.DEPTH_TEST);
-    gl.cullFace(gl.FRONT);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -418,7 +419,7 @@ export fn game_update() bool {
         @sizeOf(CameraMatrices),
     );
     g_mem.rotation += 0.5 * g_mem.delta_time;
-    gl.uniformMatrix4fv(1, 1, gl.FALSE, @ptrCast(&Mat4.createAngleAxis(Vec3.unitY, g_mem.rotation).fields));
+    gl.uniformMatrix4fv(1, 1, gl.FALSE, @ptrCast(&Mat4.fromRotation(g_mem.rotation, Vec3.up()).data));
 
     const mesh = g_assetman.resolveMesh(a.Meshes.bunny);
     mesh.positions.bind(Attrib.Position.value());

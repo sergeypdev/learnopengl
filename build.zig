@@ -38,7 +38,7 @@ pub fn build(b: *Build) void {
         @panic("buildAssets");
     };
 
-    const zlm_dep = b.dependency("zlm", .{});
+    const zalgebra_dep = b.dependency("zalgebra", .{});
 
     const lib = b.addSharedLibrary(.{
         .name = "learnopengl",
@@ -47,7 +47,7 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
     });
 
-    lib.root_module.addImport("zlm", zlm_dep.module("zlm"));
+    lib.root_module.addImport("zalgebra", zalgebra_dep.module("zalgebra"));
     lib.root_module.addImport("assets", assets_mod);
     lib.root_module.addImport("asset_manifest", asset_manifest_mod);
 

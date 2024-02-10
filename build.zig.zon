@@ -24,9 +24,9 @@
             .url = "https://github.com/sergeypdev/zig-assimp/tarball/64b31e9c01132352246955f496642332cb611577",
             .hash = "1220a57ac5fe4f45eae98d9b26f7cba93dca90782d631ef73a740b0190559d424054",
         },
-        .zlm = .{
-            .url = "https://github.com/ziglibs/zlm/tarball/b0a06cf8c7173af88d710f25bb1f8fa77972689a",
-            .hash = "1220add113da7e335228cfc469bc907879df9f6d707ae5ff2c8ac6997bf2d58d931c",
+        .zalgebra = .{
+            .url = "git+https://github.com/sergeypdev/zalgebra.git#232ff76712dc7cc270b6c48cedc84617536f3a59",
+            .hash = "12206e29e5d0f012c694f413b21cb66238964fdaef0a29781e0bf3ff75ec08a2ed78",
         },
     },
     .paths = .{
