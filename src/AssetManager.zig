@@ -273,6 +273,7 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
     };
 
     try self.loaded_assets.put(self.allocator, id, .{ .mesh = loaded_mesh });
+    try self.modified_times.put(self.allocator, id, data.modified);
     return &self.loaded_assets.getPtr(id).?.mesh;
 }
 

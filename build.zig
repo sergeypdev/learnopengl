@@ -72,6 +72,7 @@ pub fn build(b: *Build) void {
             .optimize = .ReleaseSafe,
         })) |sdl_dep| {
             const sdl2 = sdl_dep.artifact("SDL2");
+            b.getInstallStep().dependOn(&b.addInstallArtifact(sdl2, .{ .dest_dir = .{ .override = .prefix } }).step);
             lib.linkLibrary(sdl2);
             exe.linkLibrary(sdl2);
         }

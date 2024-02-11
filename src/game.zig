@@ -7,7 +7,9 @@ const formats = @import("formats.zig");
 const za = @import("zalgebra");
 const Vec2 = za.Vec2;
 const Vec3 = za.Vec3;
+const Vec4 = za.Vec4;
 const Mat4 = za.Mat4;
+const Quat = za.Quat;
 const a = @import("asset_manifest");
 const windows = std.os.windows;
 
@@ -26,8 +28,13 @@ pub extern "gdi32" fn D3DKMTWaitForVerticalBlankEvent(event: *const D3DKMT_WAITF
 
 const FRAME_ARENA_SIZE = 1024 * 1024 * 512;
 
+const MAX_FRAMES_QUEUED = 3;
+
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
+
+const MAX_ENTITIES = 1024;
+const MAX_POINT_LIGHTS = 1;
 
 // TODO: move out into renderer file maybe
 const Attrib = enum(gl.GLuint) {
@@ -40,6 +47,7 @@ const Attrib = enum(gl.GLuint) {
 };
 const UBO = enum(gl.GLuint) {
     CameraMatrices = 0,
+    PointLights = 1,
 
     pub inline fn value(self: UBO) gl.GLuint {
         return @intFromEnum(self);
@@ -55,6 +63,93 @@ pub const InitMemory = struct {
     syswm_info: c.SDL_SysWMinfo = .{},
 };
 
+pub const Entity = struct {
+    pub const Flags = packed struct {
+        active: bool = false,
+        mesh: bool = false,
+        point_light: bool = false,
+    };
+
+    pub const Transform = struct {
+        pos: Vec3 = Vec3.zero(),
+        rot: Quat = Quat.identity(),
+        scale: Vec3 = Vec3.one(),
+
+        pub fn matrix(self: *Transform) Mat4 {
+            // TODO: cache
+            return Mat4.recompose(self.pos, self.rot, self.scale);
+        }
+    };
+
+    pub const Mesh = struct {
+        handle: AssetManager.Handle.Mesh = .{},
+    };
+
+    pub const PointLight = struct {
+        color: Vec4 = Vec4.one(),
+    };
+
+    // Entity list and handle management
+    idx: u32 = 0,
+    gen: u32 = 0,
+    // Free list
+    next: ?*Entity = null,
+
+    flags: Flags = .{},
+    transform: Transform = .{},
+    mesh: Mesh = .{},
+    point_light: PointLight = .{},
+};
+
+pub const EntityHandle = packed struct {
+    idx: u32,
+    gen: u32,
+};
+
+pub const World = struct {
+    entities: [MAX_ENTITIES]Entity = [_]Entity{.{}} ** MAX_ENTITIES,
+    entity_count: usize = 0,
+    free_entity: ?*Entity = null,
+
+    pub fn addEntity(self: *World, entity: Entity) EntityHandle {
+        const ent = result: {
+            if (self.free_entity) |ent| {
+                break :result ent;
+            } else {
+                const new_entity = &self.entities[self.entity_count];
+                new_entity.idx = @intCast(self.entity_count);
+                self.entity_count += 1;
+                break :result new_entity;
+            }
+        };
+        const next = ent.next;
+        const gen = ent.gen;
+        const idx = ent.idx;
+        ent.* = entity;
+        ent.gen = gen + 1;
+        ent.idx = idx;
+        ent.flags.active = true;
+        self.free_entity = next;
+
+        return EntityHandle{ .idx = idx, .gen = ent.gen };
+    }
+
+    pub fn getEntity(self: *World, handle: EntityHandle) ?*Entity {
+        const ent = &self.entities[handle.idx];
+        if (ent.gen != handle.gen) {
+            return null;
+        }
+        return ent;
+    }
+
+    pub fn removeEntity(self: *World, handle: EntityHandle) void {
+        const ent = self.getEntity(handle) orelse return;
+        ent.flags.active = false;
+        ent.next = self.free_entity;
+        self.free_entity = ent;
+    }
+};
+
 pub const GameMemory = struct {
     global_allocator: std.mem.Allocator,
     frame_fba: std.heap.FixedBufferAllocator,
@@ -63,13 +158,17 @@ pub const GameMemory = struct {
     last_frame_time: u64 = 0,
     delta_time: f32 = 0.0000001,
     mesh_vao: gl.GLuint = 0,
+    tripple_buffer_index: usize = MAX_FRAMES_QUEUED - 1,
+    gl_fences: [MAX_FRAMES_QUEUED]?gl.GLsync = [_]?gl.GLsync{null} ** MAX_FRAMES_QUEUED,
     camera_ubo: gl.GLuint = 0,
     camera_matrices: []CameraMatrices = &.{},
-    current_camera_matrix: usize = 0,
+    point_lights_ubo: gl.GLuint = 0,
+    point_lights: []RenderPointLightArray = &.{},
     rotation: f32 = 0,
     input_state: InputState = .{},
     free_cam: FreeLookCamera = .{},
     mouse_focus: bool = false,
+    world: World = .{},
 };
 
 pub const InputState = packed struct {
@@ -126,7 +225,7 @@ fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
         c.SDL_WINDOWPOS_UNDEFINED,
         DEFAULT_WIDTH,
         DEFAULT_HEIGHT,
-        c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_OPENGL | c.SDL_WINDOW_ALLOW_HIGHDPI,
+        c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_OPENGL | c.SDL_WINDOW_ALLOW_HIGHDPI | c.SDL_WINDOW_RESIZABLE,
     );
     if (maybe_window == null) {
         std.log.err("SDL Error: {s}", .{c.SDL_GetError()});
@@ -232,9 +331,12 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     gl.viewport(0, 0, g_init.width, g_init.height);
 
     // MESH PROGRAM
-    const mesh_program_name = g_assetman.resolveShaderProgram(mesh_program).program;
+    // const mesh_program_name = g_assetman.resolveShaderProgram(mesh_program).program;
 
-    gl.uniformBlockBinding(mesh_program_name, 0, UBO.CameraMatrices.value());
+    // !NOTE: IMPORTANT: never do this again, it messes up ubo block bindings
+
+    // gl.uniformBlockBinding(mesh_program_name, 0, UBO.CameraMatrices.value());
+    // gl.uniformBlockBinding(mesh_program_name, 1, UBO.PointLights.value());
 
     // MESH VAO
     var vao: gl.GLuint = 0;
@@ -254,36 +356,93 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     gl.vertexArrayAttribFormat(vao, Attrib.Normal.value(), 3, gl.FLOAT, gl.FALSE, 0);
     gl.enableVertexArrayAttrib(vao, Attrib.Normal.value());
 
-    var camera_ubo: gl.GLuint = 0;
-    gl.createBuffers(1, &camera_ubo);
-
-    const CAMERA_MATRICES_COUNT = 120;
     const PERSISTENT_BUFFER_FLAGS: gl.GLbitfield = gl.MAP_PERSISTENT_BIT | gl.MAP_WRITE_BIT | gl.MAP_COHERENT_BIT;
-    gl.namedBufferStorage(
-        camera_ubo,
-        @sizeOf(CameraMatrices) * CAMERA_MATRICES_COUNT,
-        null,
-        PERSISTENT_BUFFER_FLAGS,
-    );
-    const camera_matrices_c: [*c]CameraMatrices = @alignCast(@ptrCast(gl.mapNamedBufferRange(camera_ubo, 0, @sizeOf(CameraMatrices) * CAMERA_MATRICES_COUNT, PERSISTENT_BUFFER_FLAGS) orelse {
-        checkGLError();
-        @panic("bind camera_ubo");
-    }));
-    const camera_matrices = camera_matrices_c[0..CAMERA_MATRICES_COUNT];
-    g_mem.camera_ubo = camera_ubo;
-    g_mem.camera_matrices = camera_matrices;
+
+    // Camera matrices ubo
+    {
+        var camera_ubo: gl.GLuint = 0;
+        gl.createBuffers(1, &camera_ubo);
+
+        gl.namedBufferStorage(
+            camera_ubo,
+            @sizeOf(CameraMatrices) * MAX_FRAMES_QUEUED,
+            null,
+            PERSISTENT_BUFFER_FLAGS,
+        );
+        const camera_matrices_c: [*c]CameraMatrices = @alignCast(@ptrCast(gl.mapNamedBufferRange(camera_ubo, 0, @sizeOf(CameraMatrices) * MAX_FRAMES_QUEUED, PERSISTENT_BUFFER_FLAGS) orelse {
+            checkGLError();
+            @panic("bind camera_ubo");
+        }));
+        const camera_matrices = camera_matrices_c[0..MAX_FRAMES_QUEUED];
+        g_mem.camera_ubo = camera_ubo;
+        g_mem.camera_matrices = camera_matrices;
+    }
+
+    // Point lights ubo
+    {
+        var point_lights_ubo: gl.GLuint = 0;
+        gl.createBuffers(1, &point_lights_ubo);
+
+        gl.namedBufferStorage(
+            point_lights_ubo,
+            @sizeOf(RenderPointLightArray) * MAX_FRAMES_QUEUED,
+            null,
+            PERSISTENT_BUFFER_FLAGS,
+        );
+        const point_lights_c: [*c]RenderPointLightArray = @alignCast(@ptrCast(gl.mapNamedBufferRange(
+            point_lights_ubo,
+            0,
+            @sizeOf(RenderPointLightArray) * MAX_FRAMES_QUEUED,
+            PERSISTENT_BUFFER_FLAGS,
+        ) orelse {
+            checkGLError();
+            @panic("bind point_lights_ubo");
+        }));
+        const point_lights = point_lights_c[0..MAX_FRAMES_QUEUED];
+        g_mem.point_lights_ubo = point_lights_ubo;
+        g_mem.point_lights = point_lights;
+    }
+
+    _ = g_mem.world.addEntity(.{
+        .transform = .{ .pos = Vec3.new(0, 1, 0) },
+        .flags = .{ .point_light = true },
+        .point_light = .{ .color = Vec4.new(1.0, 0.5, 0.2, 1.0) },
+    });
+
+    // 10 bunnies
+    {
+        for (0..10) |i| {
+            _ = g_mem.world.addEntity(.{
+                .transform = .{ .pos = Vec3.new(@floatFromInt(i * 1), 0, 0) },
+
+                .flags = .{ .mesh = true },
+                .mesh = .{ .handle = a.Meshes.bunny },
+            });
+        }
+    }
 }
 
+// TODO: move this out into a renderer
 // Should be std140
-const CameraMatrices = extern struct {
-    projection: za.Mat4,
-    view: za.Mat4,
+pub const CameraMatrices = extern struct {
+    projection: Mat4,
+    view: Mat4,
+};
+pub const RenderPointLight = extern struct {
+    pos: Vec4, // it's vec3, but glsl std140 requires 16 byte alignment anyway
+    // color: Vec4,
+};
+
+pub const RenderPointLightArray = extern struct {
+    lights: [MAX_POINT_LIGHTS]RenderPointLight,
 };
 
 export fn game_update() bool {
+    const ginit = g_init;
+    const gmem = g_mem;
     // std.debug.print("FPS: {d}\n", .{1.0 / g_mem.delta_time});
 
-    g_mem.frame_fba.reset();
+    gmem.frame_fba.reset();
     var event: c.SDL_Event = undefined;
 
     var move = Vec3.zero();
@@ -295,16 +454,16 @@ export fn game_update() bool {
                 return false;
             },
             c.SDL_MOUSEMOTION => {
-                if (g_mem.mouse_focus) {
+                if (gmem.mouse_focus) {
                     look.xMut().* += @floatFromInt(event.motion.xrel);
                     look.yMut().* += @floatFromInt(event.motion.yrel);
                 }
             },
             c.SDL_MOUSEBUTTONUP => {
-                if (!g_mem.mouse_focus) {
+                if (!gmem.mouse_focus) {
                     _ = c.SDL_SetRelativeMouseMode(c.SDL_TRUE);
 
-                    g_mem.mouse_focus = true;
+                    gmem.mouse_focus = true;
                 }
             },
             c.SDL_KEYUP, c.SDL_KEYDOWN => {
@@ -312,31 +471,31 @@ export fn game_update() bool {
                 switch (event.key.keysym.scancode) {
                     c.SDL_SCANCODE_ESCAPE => {
                         if (event.type == c.SDL_KEYUP) {
-                            if (g_mem.mouse_focus) {
+                            if (gmem.mouse_focus) {
                                 _ = c.SDL_SetRelativeMouseMode(c.SDL_FALSE);
-                                g_mem.mouse_focus = false;
+                                gmem.mouse_focus = false;
                             } else {
                                 return false;
                             }
                         }
                     },
                     c.SDL_SCANCODE_W => {
-                        g_mem.input_state.forward = pressed;
+                        gmem.input_state.forward = pressed;
                     },
                     c.SDL_SCANCODE_S => {
-                        g_mem.input_state.backward = pressed;
+                        gmem.input_state.backward = pressed;
                     },
                     c.SDL_SCANCODE_A => {
-                        g_mem.input_state.left = pressed;
+                        gmem.input_state.left = pressed;
                     },
                     c.SDL_SCANCODE_D => {
-                        g_mem.input_state.right = pressed;
+                        gmem.input_state.right = pressed;
                     },
                     c.SDL_SCANCODE_SPACE => {
-                        g_mem.input_state.up = pressed;
+                        gmem.input_state.up = pressed;
                     },
                     c.SDL_SCANCODE_LSHIFT => {
-                        g_mem.input_state.down = pressed;
+                        gmem.input_state.down = pressed;
                     },
                     else => {},
                 }
@@ -344,11 +503,11 @@ export fn game_update() bool {
             c.SDL_WINDOWEVENT => {
                 switch (event.window.event) {
                     c.SDL_WINDOWEVENT_SIZE_CHANGED => {
-                        g_init.width = event.window.data1;
-                        g_init.height = event.window.data2;
-                        std.log.debug("w: {}, h: {}\n", .{ g_init.width, g_init.height });
+                        ginit.width = event.window.data1;
+                        ginit.height = event.window.data2;
+                        std.log.debug("w: {}, h: {}\n", .{ ginit.width, ginit.height });
 
-                        gl.viewport(0, 0, g_init.width, g_init.height);
+                        gl.viewport(0, 0, ginit.width, ginit.height);
                     },
                     else => {},
                 }
@@ -358,85 +517,164 @@ export fn game_update() bool {
     }
 
     const now = c.SDL_GetPerformanceCounter();
-    g_mem.delta_time = @as(f32, @floatFromInt((now - g_mem.last_frame_time))) / @as(f32, @floatFromInt(g_mem.performance_frequency));
-    g_mem.last_frame_time = now;
+    gmem.delta_time = @as(f32, @floatFromInt((now - gmem.last_frame_time))) / @as(f32, @floatFromInt(gmem.performance_frequency));
+    gmem.last_frame_time = now;
 
     const MOVEMENT_SPEED = 0.5;
-    if (g_mem.input_state.forward) {
+    if (gmem.input_state.forward) {
         //const y = &move.data[1];
         move.yMut().* += 1;
     }
-    if (g_mem.input_state.backward) {
+    if (gmem.input_state.backward) {
         move.yMut().* -= 1;
     }
-    if (g_mem.input_state.left) {
+    if (gmem.input_state.left) {
         move.xMut().* -= 1;
     }
-    if (g_mem.input_state.right) {
+    if (gmem.input_state.right) {
         move.xMut().* += 1;
     }
-    if (g_mem.input_state.up) {
+    if (gmem.input_state.up) {
         move.zMut().* += 1;
     }
-    if (g_mem.input_state.down) {
+    if (gmem.input_state.down) {
         move.zMut().* -= 1;
     }
 
-    move = move.scale(MOVEMENT_SPEED * g_mem.delta_time);
+    move = move.scale(MOVEMENT_SPEED * gmem.delta_time);
 
-    g_mem.free_cam.update(move, look.scale(0.008));
+    gmem.free_cam.update(move, look.scale(0.008));
 
     // RENDER
     // gl.fenceSync(_condition: GLenum, _flags: GLbitfield)
 
-    const f_width: f32 = @floatFromInt(g_init.width);
-    const f_height: f32 = @floatFromInt(g_init.height);
-    g_mem.current_camera_matrix = (g_mem.current_camera_matrix + 1) % g_mem.camera_matrices.len;
-    const camera_matrix = &g_mem.camera_matrices[g_mem.current_camera_matrix];
+    const f_width: f32 = @floatFromInt(ginit.width);
+    const f_height: f32 = @floatFromInt(ginit.height);
+    gmem.tripple_buffer_index = (gmem.tripple_buffer_index + 1) % MAX_FRAMES_QUEUED;
 
-    camera_matrix.* = .{
-        .projection = Mat4.perspective(
-            30,
-            f_width / f_height,
-            0.1,
-            100.0,
-        ),
-        .view = g_mem.free_cam.view_matrix,
-    };
     gl.enable(gl.CULL_FACE);
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     gl.useProgram(g_assetman.resolveShaderProgram(a.ShaderPrograms.mesh).program);
-    gl.bindVertexArray(g_mem.mesh_vao);
+    gl.bindVertexArray(gmem.mesh_vao);
 
-    gl.bindBufferRange(
-        gl.UNIFORM_BUFFER,
-        UBO.CameraMatrices.value(),
-        g_mem.camera_ubo,
-        g_mem.current_camera_matrix * @sizeOf(CameraMatrices),
-        @sizeOf(CameraMatrices),
-    );
-    g_mem.rotation += 0.5 * g_mem.delta_time;
-    gl.uniformMatrix4fv(1, 1, gl.FALSE, @ptrCast(&Mat4.fromRotation(g_mem.rotation, Vec3.up()).data));
+    if (gmem.gl_fences[gmem.tripple_buffer_index]) |fence| {
+        const syncResult = gl.clientWaitSync(fence, gl.SYNC_FLUSH_COMMANDS_BIT, 9999999);
 
-    const mesh = g_assetman.resolveMesh(a.Meshes.bunny);
-    mesh.positions.bind(Attrib.Position.value());
-    mesh.normals.bind(Attrib.Normal.value());
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
-    gl.drawElements(
-        gl.TRIANGLES,
-        mesh.indices.count,
-        mesh.indices.type,
-        @ptrFromInt(mesh.indices.offset),
-    );
+        switch (syncResult) {
+            gl.ALREADY_SIGNALED => {
+                // awesome
+            },
+            gl.TIMEOUT_EXPIRED => {
+                // oh no, driver will crash soon :(
+                std.log.err("OpenGL clientWaitSync timeout expired D:\n", .{});
+            },
+            gl.CONDITION_SATISFIED => {
+                // awesome
+            },
+            gl.WAIT_FAILED => {
+                checkGLError();
+            },
+            else => unreachable,
+        }
+        gl.deleteSync(fence);
+        gmem.gl_fences[gmem.tripple_buffer_index] = null;
+    }
 
-    c.SDL_GL_SwapWindow(g_init.window);
-    DwmFlush();
+    gmem.gl_fences[gmem.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+
+    {
+        const camera_matrix = &gmem.camera_matrices[gmem.tripple_buffer_index];
+
+        camera_matrix.* = .{
+            .projection = Mat4.perspective(
+                60,
+                f_width / f_height,
+                0.1,
+                100.0,
+            ),
+            .view = gmem.free_cam.view_matrix,
+        };
+
+        gl.bindBufferRange(
+            gl.UNIFORM_BUFFER,
+            UBO.CameraMatrices.value(),
+            gmem.camera_ubo,
+            gmem.tripple_buffer_index * @sizeOf(CameraMatrices),
+            @sizeOf(CameraMatrices),
+        );
+    }
+
+    // Collect point lights
+    {
+        const point_lights = &gmem.point_lights[gmem.tripple_buffer_index];
+        var point_lights_count: usize = 0;
+
+        for (0..gmem.world.entity_count) |i| {
+            const ent = &gmem.world.entities[i];
+            if (!ent.flags.active) continue;
+
+            if (ent.flags.point_light) {
+                const new_pos = Mat4.fromRotation(
+                    gmem.rotation,
+                    Vec3.up(),
+                ).mulByVec4(Vec4.new(2, 1, 0, 1));
+                ent.transform.pos = Vec3.new(new_pos.x(), new_pos.y(), new_pos.z());
+
+                point_lights.lights[point_lights_count] = .{
+                    .pos = new_pos,
+                    // .color = ent.point_light.color,
+                };
+                point_lights_count += 1;
+                if (point_lights_count == point_lights.lights.len) {
+                    break;
+                }
+            }
+        }
+
+        // gl.flushMappedNamedBufferRange(
+        //     gmem.point_lights_ubo,
+        //     gmem.tripple_buffer_index * @sizeOf(RenderPointLightArray),
+        //     @sizeOf(RenderPointLightArray),
+        // );
+
+        gl.bindBufferRange(
+            gl.UNIFORM_BUFFER,
+            UBO.PointLights.value(),
+            gmem.point_lights_ubo,
+            gmem.tripple_buffer_index * @sizeOf(RenderPointLightArray),
+            @sizeOf(RenderPointLightArray),
+        );
+    }
+
+    gmem.rotation += 60 * gmem.delta_time;
+
+    // Render meshes
+    for (0..gmem.world.entity_count) |i| {
+        const ent = &gmem.world.entities[i];
+        if (!ent.flags.active or !ent.flags.mesh) continue;
+
+        gl.uniformMatrix4fv(1, 1, gl.FALSE, @ptrCast(&ent.transform.matrix().data));
+
+        const mesh = g_assetman.resolveMesh(ent.mesh.handle);
+        mesh.positions.bind(Attrib.Position.value());
+        mesh.normals.bind(Attrib.Normal.value());
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
+        gl.drawElements(
+            gl.TRIANGLES,
+            mesh.indices.count,
+            mesh.indices.type,
+            @ptrFromInt(mesh.indices.offset),
+        );
+    }
+
+    c.SDL_GL_SwapWindow(ginit.window);
+    // DwmFlush();
     // const vblank_event: D3DKMT_WAITFORVERTICALBLANKEVENT = .{
     //     .hAdapter = 0,
-    //     .hDevice = g_init.syswm_info.info.win.hdc.*,
+    //     .hDevice = ginit.syswm_info.info.win.hdc.*,
     //     .VidPnSourceId = 0,
     // };
     // switch (D3DKMTWaitForVerticalBlankEvent(&vblank_event)) {
@@ -455,9 +693,10 @@ export fn game_update() bool {
 }
 
 export fn game_shutdown() void {
+    const gmem = g_mem;
     std.log.debug("game_shutdown\n", .{});
-    g_mem.global_allocator.free(g_mem.frame_fba.buffer);
-    g_mem.global_allocator.destroy(g_mem);
+    gmem.global_allocator.free(gmem.frame_fba.buffer);
+    gmem.global_allocator.destroy(gmem);
 }
 
 export fn game_shutdown_window() void {
