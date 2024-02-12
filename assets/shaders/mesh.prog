@@ -1,4 +1,5 @@
 {
-  "vertex": "mesh.vert.glsl",
-  "fragment": "mesh.frag.glsl"
+  "shader": "mesh.glsl",
+  "vertex": true,
+  "fragment": true
 }

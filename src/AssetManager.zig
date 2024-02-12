@@ -64,14 +64,14 @@ pub fn deinit(self: *AssetManager) void {
     self.loaded_assets.deinit(self.allocator);
 }
 
-pub fn resolveShader(self: *AssetManager, handle: Handle.Shader, shader_type: ShaderType) *const LoadedShader {
+pub fn resolveShader(self: *AssetManager, handle: Handle.Shader) *const LoadedShader {
     if (handle.id == 0) return &NullShader;
 
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
         return &asset.shader;
     }
 
-    return self.loadShader(handle.id, shader_type);
+    return self.loadShader(handle.id);
 }
 
 pub fn resolveShaderProgram(self: *AssetManager, handle: Handle.ShaderProgram) *const LoadedShaderProgram {
@@ -143,18 +143,31 @@ fn loadShaderProgramErr(self: *AssetManager, id: AssetId) !*LoadedShaderProgram 
     const data = try self.loadFile(self.frame_arena, asset_manifest.getPath(id), SHADER_MAX_BYTES);
     const program = formats.ShaderProgram.fromBuffer(data.bytes);
 
-    const vertex = self.resolveShader(program.vertex, .vertex);
-    const fragment = self.resolveShader(program.fragment, .fragment);
+    if (!program.flags.vertex or !program.flags.fragment) {
+        std.log.err("Can't compile shader program {s} without vertex AND fragment shaders\n", .{asset_manifest.getPath(id)});
+        return error.UnsupportedShader;
+    }
 
-    try self.addDependencies(id, &.{ program.vertex.id, program.fragment.id });
+    // TODO: !!! this will keep shader source in memory as long as shader program is in memory
+    // probably don't want this!
+    const shader = self.resolveShader(program.shader);
+
+    // TODO: !!! Will evict shader program if shader source is evicted. Only want this for watch changes, not
+    // normal eviction!
+    try self.addDependencies(id, &.{program.shader.id});
 
     const prog = gl.createProgram();
     errdefer gl.deleteProgram(prog);
 
-    gl.attachShader(prog, vertex.shader);
-    errdefer gl.detachShader(prog, vertex.shader);
-    gl.attachShader(prog, fragment.shader);
-    errdefer gl.detachShader(prog, fragment.shader);
+    const vertex_shader = try self.compileShader(shader.source, .vertex);
+    defer gl.deleteShader(vertex_shader);
+    const fragment_shader = try self.compileShader(shader.source, .fragment);
+    defer gl.deleteShader(fragment_shader);
+
+    gl.attachShader(prog, vertex_shader);
+    defer gl.detachShader(prog, vertex_shader);
+    gl.attachShader(prog, fragment_shader);
+    defer gl.detachShader(prog, fragment_shader);
 
     gl.linkProgram(prog);
 
@@ -183,7 +196,7 @@ fn loadShaderProgramErr(self: *AssetManager, id: AssetId) !*LoadedShaderProgram 
 }
 
 const NullShader = LoadedShader{
-    .shader = 0,
+    .source = "",
 };
 
 const NullShaderProgram = LoadedShaderProgram{
@@ -284,7 +297,7 @@ const LoadedAsset = union(enum) {
 };
 
 const LoadedShader = struct {
-    shader: gl.GLuint = 0,
+    source: []const u8,
 };
 
 const LoadedShaderProgram = struct {
@@ -324,6 +337,15 @@ pub const ShaderType = enum {
             .fragment => gl.FRAGMENT_SHADER,
         };
     }
+
+    const VERTEX_DEFINES = "#version 450 core\n#define VERTEX_SHADER 1\n#define VERTEX_EXPORT out\n";
+    const FRAGMENT_DEFINES = "#version 450 core\n#define FRAGMENT_SHADER 1\n#define VERTEX_EXPORT in\n";
+    pub fn getDefines(self: ShaderType) []const u8 {
+        return switch (self) {
+            .vertex => VERTEX_DEFINES,
+            .fragment => FRAGMENT_DEFINES,
+        };
+    }
 };
 
 const AssetData = struct {
@@ -340,21 +362,35 @@ fn loadFile(self: *AssetManager, allocator: std.mem.Allocator, path: []const u8,
     return .{ .bytes = bytes, .modified = meta.modified() };
 }
 
-fn loadShader(self: *AssetManager, id: AssetId, shader_type: ShaderType) *const LoadedShader {
-    return self.loadShaderErr(id, shader_type) catch |err| {
+fn loadShader(self: *AssetManager, id: AssetId) *const LoadedShader {
+    return self.loadShaderErr(id) catch |err| {
         std.log.err("Error: {} when loading shader id {} {s}", .{ err, id, asset_manifest.getPath(id) });
         return &NullShader;
     };
 }
 
-fn loadShaderErr(self: *AssetManager, id: AssetId, shader_type: ShaderType) !*LoadedShader {
+fn loadShaderErr(self: *AssetManager, id: AssetId) !*LoadedShader {
     const path = asset_manifest.getPath(id);
 
-    const data = try self.loadFile(self.frame_arena, path, SHADER_MAX_BYTES);
+    const data = try self.loadFile(self.allocator, path, SHADER_MAX_BYTES);
+
+    try self.loaded_assets.put(self.allocator, id, .{ .shader = LoadedShader{ .source = data.bytes } });
+    try self.modified_times.put(self.allocator, id, data.modified);
+
+    return &self.loaded_assets.getPtr(id).?.shader;
+}
+
+fn compileShader(self: *AssetManager, source: []const u8, shader_type: ShaderType) !gl.GLuint {
     const shader = gl.createShader(shader_type.goGLType());
     errdefer gl.deleteShader(shader);
     std.debug.assert(shader != 0); // should only happen if incorect shader type is passed
-    gl.shaderSource(shader, 1, &[_][*c]const u8{@ptrCast(data.bytes)}, &[_]gl.GLint{@intCast(data.bytes.len)});
+    const defines = shader_type.getDefines();
+    gl.shaderSource(
+        shader,
+        2,
+        &[_][*c]const u8{ @ptrCast(shader_type.getDefines()), @ptrCast(source) },
+        &[_]gl.GLint{ @intCast(defines.len), @intCast(source.len) },
+    );
     gl.compileShader(shader);
     var success: c_int = 0;
     gl.getShaderiv(shader, gl.COMPILE_STATUS, &success);
@@ -364,17 +400,14 @@ fn loadShaderErr(self: *AssetManager, id: AssetId, shader_type: ShaderType) !*Lo
         if (info_len > 0) {
             const info_log = try self.frame_arena.allocSentinel(u8, @intCast(info_len - 1), 0);
             gl.getShaderInfoLog(shader, @intCast(info_log.len), null, info_log);
-            std.log.err("ERROR::SHADER::COMPILATION_FAILED\n{s}\n{s}\n", .{ data.bytes, info_log });
+            std.log.err("ERROR::SHADER::COMPILATION_FAILED\n{s}{s}\n{s}\n", .{ defines, source, info_log });
         } else {
-            std.log.err("ERROR::SHADER::COMPILIATION_FAILED\n{s}\nNo info log.\n", .{data.bytes});
+            std.log.err("ERROR::SHADER::COMPILIATION_FAILED\n{s}{s}\nNo info log.\n", .{ defines, source });
         }
         return error.ShaderCompilationFailed;
     }
 
-    try self.loaded_assets.put(self.allocator, id, .{ .shader = LoadedShader{ .shader = shader } });
-    try self.modified_times.put(self.allocator, id, data.modified);
-
-    return &self.loaded_assets.getPtr(id).?.shader;
+    return shader;
 }
 
 fn addDependencies(self: *AssetManager, id: AssetId, dependencies: []const AssetId) !void {
@@ -416,7 +449,7 @@ fn unloadAssetWithDependees(self: *AssetManager, id: AssetId) void {
                 gl.deleteBuffers(3, &[_]gl.GLuint{ mesh.positions.buffer, mesh.normals.buffer, mesh.indices.buffer });
             },
             .shader => |*shader| {
-                gl.deleteShader(shader.shader);
+                self.allocator.free(shader.source);
             },
             .shaderProgram => |*program| {
                 gl.deleteProgram(program.program);

@@ -129,33 +129,25 @@ fn processShaderProgram(allocator: std.mem.Allocator, absolute_input: []const u8
     defer allocator.free(file_contents);
 
     const ShaderProgram = struct {
-        vertex: []const u8,
-        fragment: []const u8,
+        shader: []const u8,
+        vertex: bool,
+        fragment: bool,
     };
     const program = try std.json.parseFromSlice(ShaderProgram, allocator, file_contents, .{});
     defer program.deinit();
 
-    const vertex_path = try std.fs.path.resolve(allocator, &.{ input_dir, program.value.vertex });
+    const shader_path = try std.fs.path.resolve(allocator, &.{ input_dir, program.value.shader });
 
-    const vertex_asset_id = asset_manifest.getAssetByPath(vertex_path);
-    if (vertex_asset_id == 0) {
-        std.log.debug("{s}\n", .{vertex_path});
-        return error.InvalidVertexAssetPath;
-    }
-
-    const frag_path = try std.fs.path.resolve(allocator, &.{ input_dir, program.value.fragment });
-    defer allocator.free(frag_path);
-
-    const frag_asset_id = asset_manifest.getAssetByPath(frag_path);
-    if (vertex_asset_id == 0) {
-        std.log.debug("{s}\n", .{frag_path});
-        return error.InvalidFragmentAssetPath;
+    const shader_asset_id = asset_manifest.getAssetByPath(shader_path);
+    if (shader_asset_id == 0) {
+        std.log.debug("{s}\n", .{shader_path});
+        return error.InvalidShaderPath;
     }
 
     const out_file = try std.fs.createFileAbsolute(output, .{});
     defer out_file.close();
     var buf_writer = std.io.bufferedWriter(out_file.writer());
 
-    try formats.writeShaderProgram(buf_writer.writer(), vertex_asset_id, frag_asset_id, formats.native_endian);
+    try formats.writeShaderProgram(buf_writer.writer(), shader_asset_id, program.value.vertex, program.value.fragment, formats.native_endian);
     try buf_writer.flush();
 }

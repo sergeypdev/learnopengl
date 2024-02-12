@@ -70,17 +70,47 @@ pub fn writeMesh(writer: anytype, value: Mesh, endian: std.builtin.Endian) !void
 }
 
 pub const ShaderProgram = extern struct {
-    vertex: Handle.Shader,
-    fragment: Handle.Shader,
+    pub const Flags = packed struct {
+        vertex: bool,
+        fragment: bool,
+        _pad: u6 = 0,
+    };
+    comptime {
+        if (@bitSizeOf(Flags) != 8) {
+            @compileError("ShaderProgram.Flags needs to be updated");
+        }
+    }
+
+    shader: Handle.Shader,
+    flags: Flags,
 
     pub fn fromBuffer(buf: []u8) *align(1) ShaderProgram {
         return @ptrCast(buf);
     }
 };
 
-pub fn writeShaderProgram(writer: anytype, vertex: u32, fragment: u32, endian: std.builtin.Endian) !void {
-    try writer.writeInt(u32, vertex, endian);
-    try writer.writeInt(u32, fragment, endian);
+test "ShaderProgram serialization" {
+    const source = ShaderProgram{
+        .flags = .{ .vertex = true, .fragment = true },
+        .shader = .{ .id = 123 },
+    };
+
+    var buf: [@sizeOf(ShaderProgram)]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeShaderProgram(stream.writer(), source.shader.id, source.flags.vertex, source.flags.fragment, native_endian);
+
+    const result: *align(1) ShaderProgram = @ptrCast(&buf);
+
+    try std.testing.expectEqual(source, result.*);
+}
+
+pub fn writeShaderProgram(writer: anytype, shader: u32, vertex: bool, fragment: bool, endian: std.builtin.Endian) !void {
+    try writer.writeInt(u32, shader, endian);
+    try writer.writeInt(
+        u8,
+        @bitCast(ShaderProgram.Flags{ .vertex = vertex, .fragment = fragment }),
+        endian,
+    );
 }
 
 fn writeVector3(writer: anytype, value: Vector3, endian: std.builtin.Endian) !void {

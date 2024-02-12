@@ -46,10 +46,18 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const lib_unit_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/game.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    const lib_compiles = [_]*Step.Compile{ lib, lib_unit_tests };
 
-    lib.root_module.addImport("zalgebra", zalgebra_dep.module("zalgebra"));
-    lib.root_module.addImport("assets", assets_mod);
-    lib.root_module.addImport("asset_manifest", asset_manifest_mod);
+    for (lib_compiles) |l| {
+        l.root_module.addImport("zalgebra", zalgebra_dep.module("zalgebra"));
+        l.root_module.addImport("assets", assets_mod);
+        l.root_module.addImport("asset_manifest", asset_manifest_mod);
+    }
 
     const install_lib = b.addInstallArtifact(lib, .{ .dest_dir = .{ .override = .prefix } });
     b.getInstallStep().dependOn(&install_lib.step);
@@ -64,8 +72,10 @@ pub fn build(b: *Build) void {
     });
 
     if (b.systemIntegrationOption("SDL2", .{ .default = b.host.result.os.tag != .windows })) {
-        lib.linkSystemLibrary("SDL2");
         exe.linkSystemLibrary("SDL2");
+        for (lib_compiles) |l| {
+            l.linkSystemLibrary("SDL2");
+        }
     } else {
         if (b.lazyDependency("SDL", .{
             .target = target,
@@ -73,8 +83,11 @@ pub fn build(b: *Build) void {
         })) |sdl_dep| {
             const sdl2 = sdl_dep.artifact("SDL2");
             b.getInstallStep().dependOn(&b.addInstallArtifact(sdl2, .{ .dest_dir = .{ .override = .prefix } }).step);
-            lib.linkLibrary(sdl2);
             exe.linkLibrary(sdl2);
+
+            for (lib_compiles) |l| {
+                l.linkLibrary(sdl2);
+            }
         }
     }
 
@@ -107,15 +120,7 @@ pub fn build(b: *Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // // Creates a step for unit testing. This only builds the test executable
-    // // but does not run it.
-    // const lib_unit_tests = b.addTest(.{
-    //     .root_source_file = .{ .path = "src/root.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-
-    // const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const exe_unit_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
@@ -129,7 +134,7 @@ pub fn build(b: *Build) void {
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
-    // test_step.dependOn(&run_lib_unit_tests.step);
+    test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
 }
 
