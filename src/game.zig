@@ -419,7 +419,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     _ = g_mem.world.addEntity(.{
         .transform = .{ .pos = Vec3.new(1, 1, 0) },
         .flags = .{ .point_light = true, .rotate = true },
-        .point_light = .{ .color_intensity = Vec4.new(1.0, 0.5, 0.2, 1.0), .radius = 1 },
+        .point_light = .{ .color_intensity = Vec4.new(1.0, 0.3, 0.1, 100.0), .radius = 0.1 },
         .rotate = .{ .axis = Vec3.up(), .rate = 60 },
     });
 
@@ -427,10 +427,10 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .transform = .{ .pos = Vec3.new(-1, 1, 0) },
         .flags = .{ .point_light = true, .rotate = true },
         .point_light = .{
-            .color_intensity = Vec4.new(0.2, 0.5, 1.0, 1.0),
-            .radius = 1,
+            .color_intensity = Vec4.new(0.2, 0.5, 1.0, 100.0),
+            .radius = 0.1,
         },
-        .rotate = .{ .axis = Vec3.up(), .rate = -60 },
+        .rotate = .{ .axis = Vec3.up(), .rate = -20 },
     });
 
     // Plane

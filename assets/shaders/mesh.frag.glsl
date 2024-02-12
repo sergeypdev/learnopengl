@@ -38,8 +38,12 @@ void main() {
 
     float ndotl = max(dot(L, normal), 0);
 
-    finalColor += ndotl * lights[i].color.xyz * att * diffuseColor;
+    finalColor += ndotl * lights[i].color.w * lights[i].color.xyz * att * diffuseColor;
+
   }
 
   FragColor = vec4(finalColor, 1.0f);
+
+  float gamma = 2.2;
+  FragColor.rgb = pow(FragColor.rgb, vec3(1.0/gamma));
 }
