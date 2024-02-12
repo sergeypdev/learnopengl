@@ -227,10 +227,10 @@ var g_mem: *GameMemory = undefined;
 var g_assetman: *AssetManager = undefined;
 
 fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
-    if (c.SDL_SetHint(c.SDL_HINT_WINDOWS_DPI_AWARENESS_, "1") == c.SDL_FALSE) {
+    if (c.SDL_SetHint(c.SDL_HINT_WINDOWS_DPI_AWARENESS_, "permonitorv2") == c.SDL_FALSE) {
         std.log.debug("Failed to setup windows DPI scaling\n", .{});
     }
-    if (c.SDL_SetHint(c.SDL_HINT_WINDOWS_DPI_SCALING, "1") == c.SDL_FALSE) {
+    if (c.SDL_SetHint(c.SDL_HINT_WINDOWS_DPI_SCALING_, "1") == c.SDL_FALSE) {
         std.log.debug("Failed to setup windows DPI scaling\n", .{});
     }
     // _ = DwmEnableMMCSS(1);
@@ -540,7 +540,9 @@ export fn game_update() bool {
                     },
                     c.SDL_SCANCODE_ESCAPE => {
                         if (event.type == c.SDL_KEYUP) {
-                            if (gmem.mouse_focus) {
+                            if (ginit.fullscreen) {
+                                toggleFullScreen() catch continue;
+                            } else if (gmem.mouse_focus) {
                                 _ = c.SDL_SetRelativeMouseMode(c.SDL_FALSE);
                                 gmem.mouse_focus = false;
                             } else {
@@ -845,4 +847,7 @@ fn toggleFullScreen() !void {
     }
 
     ginit.fullscreen = !ginit.fullscreen;
+
+    // c.SDL_GL_GetDrawableSize(ginit.window, &ginit.width, &ginit.height);
+    // gl.viewport(0, 0, ginit.width, ginit.height);
 }

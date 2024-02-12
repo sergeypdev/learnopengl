@@ -8,7 +8,10 @@ const c = @cImport({
     @cInclude("assimp/scene.h");
     @cInclude("assimp/mesh.h");
     @cInclude("assimp/postprocess.h");
+
+    @cInclude("stb_image.h");
 });
+const basisu = @import("mach-basisu");
 
 const ASSET_MAX_BYTES = 1024 * 1024 * 1024;
 
@@ -16,6 +19,7 @@ const AssetType = enum {
     Mesh,
     Shader,
     ShaderProgram,
+    Texture,
 };
 
 pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
@@ -27,6 +31,9 @@ pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
     }
     if (std.mem.endsWith(u8, path, ".glsl")) {
         return .Shader;
+    }
+    if (std.mem.endsWith(u8, path, ".png")) {
+        return .Texture;
     }
     return null;
 }
@@ -47,7 +54,8 @@ pub fn main() !void {
     switch (asset_type) {
         .Mesh => try processMesh(allocator, input, output),
         .ShaderProgram => try processShaderProgram(allocator, std.mem.span(input), output),
-        else => return error.DontProcessShaders,
+        .Texture => try processTexture(allocator, input, output),
+        else => return error.CantProcessAssetType,
     }
 }
 
@@ -164,5 +172,43 @@ fn processShaderProgram(allocator: std.mem.Allocator, absolute_input: []const u8
     var buf_writer = std.io.bufferedWriter(out_file.writer());
 
     try formats.writeShaderProgram(buf_writer.writer(), shader_asset_id, program.value.vertex, program.value.fragment, formats.native_endian);
+    try buf_writer.flush();
+}
+
+fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []const u8) !void {
+    _ = allocator; // autofix
+    var x: c_int = undefined;
+    var y: c_int = undefined;
+    var comps: c_int = undefined;
+
+    const FORCED_COMPONENTS = 3; // force rgb
+    const data_c = @as(?[*]u8, @ptrCast(c.stbi_load(input, &x, &y, &comps, FORCED_COMPONENTS))) orelse return error.ImageLoadError;
+    defer c.stbi_image_free(data_c);
+
+    const data = data_c[0 .. @as(usize, @intCast(x)) * @as(usize, @intCast(y)) * FORCED_COMPONENTS];
+
+    basisu.init_encoder();
+
+    var params = basisu.CompressorParams.init(@intCast(try std.Thread.getCpuCount()));
+    defer params.deinit();
+
+    const img = params.getImageSource(0);
+    img.fill(data, @intCast(x), @intCast(y), @intCast(FORCED_COMPONENTS));
+
+    params.setQualityLevel(64);
+    params.setBasisFormat(basisu.BasisTextureFormat.etc1s);
+    // params.setColorSpace(basisu.ColorSpace.linear);
+    params.setGenerateMipMaps(true);
+
+    var compressor = try basisu.Compressor.init(params);
+    defer compressor.deinit();
+
+    try compressor.process();
+
+    const out_file = try std.fs.createFileAbsolute(output, .{});
+    defer out_file.close();
+    var buf_writer = std.io.bufferedWriter(out_file.writer());
+
+    try buf_writer.writer().writeAll(compressor.output());
     try buf_writer.flush();
 }

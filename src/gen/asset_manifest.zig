@@ -1,4 +1,4 @@
-pub const manifest = @import("asset_manifest.gen.zig");
+pub const manifest = @import("asset_manifest_gen");
 
 pub const Meshes = manifest.Meshes;
 pub const Shaders = manifest.Shaders;

@@ -22,6 +22,8 @@ pub fn build(b: *Build) void {
         "Prioritize performance, safety, or binary size for build time tools",
     ) orelse .Debug;
 
+    const zalgebra_dep = b.dependency("zalgebra", .{});
+
     const assets_mod = b.addModule("assets", .{ .root_source_file = .{ .path = "src/assets/root.zig" } });
     const asset_manifest_mod = b.addModule("asset_manifest", .{ .root_source_file = .{ .path = "src/gen/asset_manifest.zig" } });
     asset_manifest_mod.addImport("assets", assets_mod);
@@ -29,16 +31,18 @@ pub fn build(b: *Build) void {
     const assets_step = b.step("assets", "Build and install assets");
     b.getInstallStep().dependOn(assets_step);
 
-    const assetc = buildAssetCompiler(b, buildOptimize);
+    const assetc = buildAssetCompiler(b, assets_step, buildOptimize);
+
     assetc.root_module.addImport("assets", assets_mod);
     assetc.root_module.addImport("asset_manifest", asset_manifest_mod);
 
-    buildAssets(b, assets_step, assetc, "assets") catch |err| {
+    const gen_asset_manifest = buildAssets(b, assets_step, assetc, "assets") catch |err| {
         std.log.err("Failed to build assets {}\n", .{err});
         @panic("buildAssets");
     };
-
-    const zalgebra_dep = b.dependency("zalgebra", .{});
+    const gen_asset_manifest_mod = b.createModule(.{ .root_source_file = gen_asset_manifest });
+    gen_asset_manifest_mod.addImport("assets", assets_mod);
+    asset_manifest_mod.addImport("asset_manifest_gen", gen_asset_manifest_mod);
 
     const lib = b.addSharedLibrary(.{
         .name = "learnopengl",
@@ -53,7 +57,7 @@ pub fn build(b: *Build) void {
     });
     const lib_compiles = [_]*Step.Compile{ lib, lib_unit_tests };
 
-    for (lib_compiles) |l| {
+    inline for (lib_compiles) |l| {
         l.root_module.addImport("zalgebra", zalgebra_dep.module("zalgebra"));
         l.root_module.addImport("assets", assets_mod);
         l.root_module.addImport("asset_manifest", asset_manifest_mod);
@@ -73,21 +77,21 @@ pub fn build(b: *Build) void {
 
     if (b.systemIntegrationOption("SDL2", .{ .default = b.host.result.os.tag != .windows })) {
         exe.linkSystemLibrary("SDL2");
-        for (lib_compiles) |l| {
+        inline for (lib_compiles) |l| {
             l.linkSystemLibrary("SDL2");
         }
     } else {
-        if (b.lazyDependency("SDL", .{
+        const sdl_dep = b.dependency("SDL", .{
             .target = target,
             .optimize = .ReleaseSafe,
-        })) |sdl_dep| {
-            const sdl2 = sdl_dep.artifact("SDL2");
-            b.getInstallStep().dependOn(&b.addInstallArtifact(sdl2, .{ .dest_dir = .{ .override = .prefix } }).step);
-            exe.linkLibrary(sdl2);
+        });
 
-            for (lib_compiles) |l| {
-                l.linkLibrary(sdl2);
-            }
+        const sdl2 = sdl_dep.artifact("SDL2");
+        b.getInstallStep().dependOn(&b.addInstallArtifact(sdl2, .{ .dest_dir = .{ .override = .prefix } }).step);
+        exe.linkLibrary(sdl2);
+
+        inline for (lib_compiles) |l| {
+            l.linkLibrary(sdl2);
         }
     }
 
@@ -172,7 +176,7 @@ const NestedAssetDef = union(enum) {
 };
 
 // Find all assets and cook them using assetc
-fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const u8) !void {
+fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const u8) !Build.LazyPath {
     const assetsPath = b.pathFromRoot(path);
     defer b.allocator.free(assetsPath);
     var assetsDir = try std.fs.openDirAbsolute(assetsPath, .{ .iterate = true });
@@ -182,6 +186,7 @@ fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const 
     var meshes = NestedAssetDef{ .path = .{} };
     var shaders = NestedAssetDef{ .path = .{} };
     var shader_programs = NestedAssetDef{ .path = .{} };
+    var textures = NestedAssetDef{ .path = .{} };
     var asset_paths = std.ArrayList([]const u8).init(b.allocator);
 
     var walker = try assetsDir.walk(b.allocator);
@@ -258,11 +263,40 @@ fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const 
                 try asset_paths.append(out_path);
             }
         }
+
+        if (std.mem.endsWith(u8, entry.basename, ".png")) {
+            const run_assetc = b.addRunArtifact(assetc);
+            run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
+            const out_name = try std.mem.concat(
+                b.allocator,
+                u8,
+                &.{ std.fs.path.stem(entry.basename), ".bu" }, // basisu
+            );
+            const compiled_file = run_assetc.addOutputFileArg(out_name);
+
+            const out_path = b.pathJoin(&.{
+                path,
+                std.fs.path.dirname(entry.path) orelse "",
+                out_name,
+            });
+            const install_asset = b.addInstallFileWithDir(
+                compiled_file,
+                .prefix,
+                out_path,
+            );
+            step.dependOn(&install_asset.step);
+
+            {
+                const id = asset_id;
+                asset_id += 1;
+                try textures.put(b.allocator, out_path, id);
+                try asset_paths.append(out_path);
+            }
+        }
     }
 
-    const manifest_step = try writeAssetManifest(b, step, asset_paths.items, &meshes, &shaders, &shader_programs);
-
-    assetc.step.dependOn(&manifest_step.step);
+    const manifest_path = try writeAssetManifest(b, asset_paths.items, &meshes, &shaders, &shader_programs, &textures);
+    return manifest_path;
 }
 
 fn writeNestedAssetDef(writer: anytype, handle: []const u8, name: []const u8, asset_def: *NestedAssetDef, indent: usize) !void {
@@ -287,12 +321,12 @@ fn writeNestedAssetDef(writer: anytype, handle: []const u8, name: []const u8, as
 
 fn writeAssetManifest(
     b: *Build,
-    asset_step: *Step,
     asset_paths: [][]const u8,
     meshes: *NestedAssetDef,
     shaders: *NestedAssetDef,
     shader_programs: *NestedAssetDef,
-) !*Step.WriteFile {
+    textures: *NestedAssetDef,
+) !Build.LazyPath {
     var mesh_asset_manifest = std.ArrayList(u8).init(b.allocator);
     const writer = mesh_asset_manifest.writer();
 
@@ -306,6 +340,8 @@ fn writeAssetManifest(
     try writeNestedAssetDef(writer, "Shader", "Shaders", shaders, 0);
     try writer.writeByte('\n');
     try writeNestedAssetDef(writer, "ShaderProgram", "ShaderPrograms", shader_programs, 0);
+    try writer.writeByte('\n');
+    try writeNestedAssetDef(writer, "Texture", "Textures", textures, 0);
     try writer.writeByte('\n');
 
     try writer.writeAll("pub const asset_paths = [_][]const u8{\n");
@@ -322,20 +358,26 @@ fn writeAssetManifest(
 
     const result = mesh_asset_manifest.toOwnedSlice() catch @panic("OOM");
     const write_step = b.addWriteFiles();
-    write_step.addBytesToSource(result, "src/gen/asset_manifest.gen.zig");
-    asset_step.dependOn(&write_step.step);
-    return write_step;
+    const manifest_path = write_step.add("asset_manifest.gen.zig", result);
+    return manifest_path;
 }
 
-fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode) *Step.Compile {
+fn buildAssetCompiler(b: *Build, assets_step: *Step, optimize: std.builtin.OptimizeMode) *Step.Compile {
     const assimp_dep = b.dependency("zig-assimp", .{
         .target = b.host,
         .optimize = optimize,
         //.formats = @as([]const u8, "3DS,3MF,AC,AMF,ASE,Assbin,Assjson,Assxml,B3D,Blender,BVH,C4D,COB,Collada,CSM,DXF,FBX,glTF,glTF2,HMP,IFC,Irr,LWO,LWS,M3D,MD2,MD3,MD5,MDC,MDL,MMD,MS3D,NDO,NFF,Obj,OFF,Ogre,OpenGEX,Ply,Q3BSP,Q3D,Raw,SIB,SMD,Step,STEPParser,STL,Terragen,Unreal,X,X3D,XGL"),
         .formats = @as([]const u8, "Obj"),
     });
-    //const assimp = assimp_dep.builder.dependency("assimp", .{});
+
+    const basisu_optimize = b.option(std.builtin.OptimizeMode, "basisu_optimize", "Optimization level for basisu. ReleaseSafe or faster is recommented, otherwise it's unbearable.") orelse .ReleaseFast;
+    const basisu_dep = b.dependency("mach-basisu", .{
+        .target = b.host,
+        .optimize = basisu_optimize,
+    });
+
     const assimp_lib = assimp_dep.artifact("assimp");
+    const basisu_lib = basisu_dep.artifact("mach-basisu");
 
     const assetc = b.addExecutable(.{
         .name = "assetc",
@@ -345,10 +387,17 @@ fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode) *Step.Compi
     });
 
     assetc.root_module.addAnonymousImport("formats", .{ .root_source_file = .{ .path = "src/formats.zig" } });
+    assetc.root_module.addImport("mach-basisu", basisu_dep.module("mach-basisu"));
 
     assetc.linkLibrary(assimp_lib);
+    assetc.linkLibrary(basisu_lib);
     assetc.linkLibC();
     assetc.linkLibCpp();
-    b.installArtifact(assetc);
+
+    assetc.addCSourceFile(.{ .file = .{ .path = "tools/stb/stb_image.c" }, .flags = &.{"-std=c99"} });
+    assetc.addIncludePath(.{ .path = "tools/stb" });
+
+    const install_step = b.addInstallArtifact(assetc, .{ .dest_dir = .{ .override = .prefix } });
+    assets_step.dependOn(&install_step.step);
     return assetc;
 }
