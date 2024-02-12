@@ -61,6 +61,8 @@ pub const InitMemory = struct {
     context: ?*anyopaque,
     width: c_int,
     height: c_int,
+    fullscreen: bool = false,
+    vsync: bool = false,
     syswm_info: c.SDL_SysWMinfo = .{},
 };
 
@@ -225,6 +227,12 @@ var g_mem: *GameMemory = undefined;
 var g_assetman: *AssetManager = undefined;
 
 fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
+    if (c.SDL_SetHint(c.SDL_HINT_WINDOWS_DPI_AWARENESS_, "1") == c.SDL_FALSE) {
+        std.log.debug("Failed to setup windows DPI scaling\n", .{});
+    }
+    if (c.SDL_SetHint(c.SDL_HINT_WINDOWS_DPI_SCALING, "1") == c.SDL_FALSE) {
+        std.log.debug("Failed to setup windows DPI scaling\n", .{});
+    }
     // _ = DwmEnableMMCSS(1);
     try sdl_try(c.SDL_Init(c.SDL_INIT_EVERYTHING));
 
@@ -232,6 +240,7 @@ fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
     try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MAJOR_VERSION, 4));
     try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, 5));
     try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE));
+    try sdl_try(c.SDL_GL_SetAttribute(c.SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 0));
 
     const maybe_window = c.SDL_CreateWindow(
         "Learn OpenGL with Zig!",
@@ -249,7 +258,7 @@ fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
 
     const context = c.SDL_GL_CreateContext(window);
 
-    _ = c.SDL_GL_SetSwapInterval(0);
+    try sdl_try(c.SDL_GL_SetSwapInterval(0));
 
     g_init = try global_allocator.create(InitMemory);
     g_init_exists = true;
@@ -265,6 +274,8 @@ fn game_init_window_err(global_allocator: std.mem.Allocator) !void {
     version.major = c.SDL_MAJOR_VERSION;
     version.minor = c.SDL_MINOR_VERSION;
     version.patch = c.SDL_PATCHLEVEL;
+
+    c.SDL_GL_GetDrawableSize(window, &g_init.width, &g_init.height);
 
     if (c.SDL_GetWindowWMInfo(window, &g_init.syswm_info) == 0) {
         const err = c.SDL_GetError();
@@ -451,7 +462,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     {
         for (0..10) |i| {
             _ = g_mem.world.addEntity(.{
-                .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3, -0.03, 0) },
+                .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3, 0, 0) },
 
                 .flags = .{ .mesh = true },
                 .mesh = .{ .handle = a.Meshes.bunny },
@@ -513,6 +524,20 @@ export fn game_update() bool {
             c.SDL_KEYUP, c.SDL_KEYDOWN => {
                 const pressed = event.key.state == c.SDL_PRESSED;
                 switch (event.key.keysym.scancode) {
+                    // Toggle fullscreen
+                    c.SDL_SCANCODE_F11 => {
+                        if (event.type == c.SDL_KEYDOWN) {
+                            toggleFullScreen() catch continue;
+                        }
+                    },
+                    // Toggle vsync
+                    c.SDL_SCANCODE_F10 => {
+                        if (event.type == c.SDL_KEYDOWN) {
+                            const newSwap: c_int = if (ginit.vsync) 0 else 1;
+                            sdl_try(c.SDL_GL_SetSwapInterval(newSwap)) catch continue;
+                            ginit.vsync = !ginit.vsync;
+                        }
+                    },
                     c.SDL_SCANCODE_ESCAPE => {
                         if (event.type == c.SDL_KEYUP) {
                             if (gmem.mouse_focus) {
@@ -547,8 +572,7 @@ export fn game_update() bool {
             c.SDL_WINDOWEVENT => {
                 switch (event.window.event) {
                     c.SDL_WINDOWEVENT_SIZE_CHANGED => {
-                        ginit.width = event.window.data1;
-                        ginit.height = event.window.data2;
+                        c.SDL_GL_GetDrawableSize(ginit.window, &ginit.width, &ginit.height);
                         std.log.debug("w: {}, h: {}\n", .{ ginit.width, ginit.height });
 
                         gl.viewport(0, 0, ginit.width, ginit.height);
@@ -723,6 +747,7 @@ export fn game_update() bool {
     }
 
     c.SDL_GL_SwapWindow(ginit.window);
+    c.SDL_Delay(1);
     // const vblank_event: D3DKMT_WAITFORVERTICALBLANKEVENT = .{
     //     .hAdapter = 0,
     //     .hDevice = ginit.syswm_info.info.win.hdc.*,
@@ -796,4 +821,28 @@ fn sdl_try(result: c_int) !void {
         std.log.err("SDL Error: {s}", .{c.SDL_GetError()});
         return error.SDLError;
     }
+}
+
+fn toggleFullScreen() !void {
+    const ginit = g_init;
+    const current_flags: c.Uint32 = if (g_init.fullscreen) c.SDL_WINDOW_FULLSCREEN else 0;
+    const new_flags: c.Uint32 = if (g_init.fullscreen) 0 else c.SDL_WINDOW_FULLSCREEN;
+
+    const display_index = c.SDL_GetWindowDisplayIndex(ginit.window);
+    var mode: c.SDL_DisplayMode = undefined;
+    try sdl_try(c.SDL_GetDesktopDisplayMode(display_index, &mode));
+
+    // When going fullscreen set a good display mode
+    if (!ginit.fullscreen) {
+        try sdl_try(c.SDL_SetWindowDisplayMode(ginit.window, &mode));
+    }
+
+    try sdl_try(c.SDL_SetWindowFullscreen(ginit.window, new_flags));
+    errdefer {
+        sdl_try(c.SDL_SetWindowFullscreen(ginit.window, current_flags)) catch {
+            std.log.err("Failed to change fullscreen mode and then failed to restore the old fullscreen mode\n", .{});
+        };
+    }
+
+    ginit.fullscreen = !ginit.fullscreen;
 }
