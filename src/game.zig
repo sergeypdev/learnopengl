@@ -196,9 +196,10 @@ pub const FreeLookCamera = struct {
     pos: Vec3 = Vec3.new(0, 0, -1),
     pitch: f32 = 0,
     yaw: f32 = 0,
+    move_speed: f32 = 0.5,
     view_matrix: Mat4 = Mat4.identity(),
 
-    pub fn update(self: *FreeLookCamera, move: Vec3, look: Vec2) void {
+    pub fn update(self: *FreeLookCamera, dt: f32, move: Vec3, look: Vec2) void {
         self.yaw += look.x();
         self.pitch += look.y();
         // First rotate pitch, then yaw
@@ -211,7 +212,7 @@ pub const FreeLookCamera = struct {
 
         const movement = left.scale(-move.x()).add(forward.scale(move.y())).add(up.scale(move.z()));
 
-        self.pos = self.pos.add(movement);
+        self.pos = self.pos.add(movement.scale(self.move_speed * dt));
 
         self.view_matrix = Mat4.lookAt(self.pos, self.pos.add(forward), Vec3.up());
     }
@@ -432,11 +433,18 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .rotate = .{ .axis = Vec3.up(), .rate = -60 },
     });
 
+    // Plane
+    _ = g_mem.world.addEntity(.{
+        .flags = .{ .mesh = true },
+        .transform = .{ .scale = Vec3.one().scale(100) },
+        .mesh = .{ .handle = a.Meshes.plane },
+    });
+
     // 10 bunnies
     {
         for (0..10) |i| {
             _ = g_mem.world.addEntity(.{
-                .transform = .{ .pos = Vec3.new(@floatFromInt(i * 1), 0, 0) },
+                .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3, -0.03, 0) },
 
                 .flags = .{ .mesh = true },
                 .mesh = .{ .handle = a.Meshes.bunny },
@@ -490,6 +498,11 @@ export fn game_update() bool {
                     gmem.mouse_focus = true;
                 }
             },
+            c.SDL_MOUSEWHEEL => {
+                if (gmem.mouse_focus) {
+                    gmem.free_cam.move_speed = @max(gmem.free_cam.move_speed + event.wheel.preciseY * 0.1, 0);
+                }
+            },
             c.SDL_KEYUP, c.SDL_KEYDOWN => {
                 const pressed = event.key.state == c.SDL_PRESSED;
                 switch (event.key.keysym.scancode) {
@@ -518,7 +531,7 @@ export fn game_update() bool {
                     c.SDL_SCANCODE_SPACE => {
                         gmem.input_state.up = pressed;
                     },
-                    c.SDL_SCANCODE_LSHIFT => {
+                    c.SDL_SCANCODE_LCTRL => {
                         gmem.input_state.down = pressed;
                     },
                     else => {},
@@ -544,7 +557,6 @@ export fn game_update() bool {
     gmem.delta_time = @as(f32, @floatFromInt((now - gmem.last_frame_time))) / @as(f32, @floatFromInt(gmem.performance_frequency));
     gmem.last_frame_time = now;
 
-    const MOVEMENT_SPEED = 0.5;
     if (gmem.input_state.forward) {
         //const y = &move.data[1];
         move.yMut().* += 1;
@@ -565,9 +577,8 @@ export fn game_update() bool {
         move.zMut().* -= 1;
     }
 
-    move = move.scale(MOVEMENT_SPEED * gmem.delta_time);
-
-    gmem.free_cam.update(move, look.scale(0.008));
+    // TODO: make this an entity
+    gmem.free_cam.update(gmem.delta_time, move, look.scale(0.008));
 
     // RENDER
     // gl.fenceSync(_condition: GLenum, _flags: GLbitfield)
@@ -704,7 +715,6 @@ export fn game_update() bool {
     }
 
     c.SDL_GL_SwapWindow(ginit.window);
-    // DwmFlush();
     // const vblank_event: D3DKMT_WAITFORVERTICALBLANKEVENT = .{
     //     .hAdapter = 0,
     //     .hDevice = ginit.syswm_info.info.win.hdc.*,
