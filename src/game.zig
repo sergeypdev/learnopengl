@@ -34,7 +34,7 @@ const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
 
 const MAX_ENTITIES = 1024;
-const MAX_POINT_LIGHTS = 1;
+const MAX_POINT_LIGHTS = 8;
 
 // TODO: move out into renderer file maybe
 const Attrib = enum(gl.GLuint) {
@@ -68,6 +68,7 @@ pub const Entity = struct {
         active: bool = false,
         mesh: bool = false,
         point_light: bool = false,
+        rotate: bool = false,
     };
 
     pub const Transform = struct {
@@ -83,10 +84,20 @@ pub const Entity = struct {
 
     pub const Mesh = struct {
         handle: AssetManager.Handle.Mesh = .{},
+        color: Vec3 = Vec3.one(),
     };
-
     pub const PointLight = struct {
-        color: Vec4 = Vec4.one(),
+        radius: f32 = std.math.floatEps(f32), // should never be 0 or bad things happen
+        color_intensity: Vec4 = Vec4.one(), // x, y, z - color, w - intensity
+
+        pub fn color(self: *PointLight) Vec3 {
+            const col = self.color_intensity;
+            return Vec3.new(col.x(), col.y(), col.z());
+        }
+    };
+    pub const Rotate = struct {
+        axis: Vec3 = Vec3.up(),
+        rate: f32 = 0, // deg/s
     };
 
     // Entity list and handle management
@@ -99,6 +110,7 @@ pub const Entity = struct {
     transform: Transform = .{},
     mesh: Mesh = .{},
     point_light: PointLight = .{},
+    rotate: Rotate = .{},
 };
 
 pub const EntityHandle = packed struct {
@@ -404,9 +416,20 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     }
 
     _ = g_mem.world.addEntity(.{
-        .transform = .{ .pos = Vec3.new(0, 1, 0) },
-        .flags = .{ .point_light = true },
-        .point_light = .{ .color = Vec4.new(1.0, 0.5, 0.2, 1.0) },
+        .transform = .{ .pos = Vec3.new(1, 1, 0) },
+        .flags = .{ .point_light = true, .rotate = true },
+        .point_light = .{ .color_intensity = Vec4.new(1.0, 0.5, 0.2, 1.0), .radius = 1 },
+        .rotate = .{ .axis = Vec3.up(), .rate = 60 },
+    });
+
+    _ = g_mem.world.addEntity(.{
+        .transform = .{ .pos = Vec3.new(-1, 1, 0) },
+        .flags = .{ .point_light = true, .rotate = true },
+        .point_light = .{
+            .color_intensity = Vec4.new(0.2, 0.5, 1.0, 1.0),
+            .radius = 1,
+        },
+        .rotate = .{ .axis = Vec3.up(), .rate = -60 },
     });
 
     // 10 bunnies
@@ -429,12 +452,13 @@ pub const CameraMatrices = extern struct {
     view: Mat4,
 };
 pub const RenderPointLight = extern struct {
-    pos: Vec4, // it's vec3, but glsl std140 requires 16 byte alignment anyway
-    // color: Vec4,
+    pos_radius: Vec4, // x, y, z - pos, w - radius
+    color_intensity: Vec4, // x, y, z - color, w - intensity
 };
 
 pub const RenderPointLightArray = extern struct {
     lights: [MAX_POINT_LIGHTS]RenderPointLight,
+    count: c_uint,
 };
 
 export fn game_update() bool {
@@ -610,25 +634,29 @@ export fn game_update() bool {
     // Collect point lights
     {
         const point_lights = &gmem.point_lights[gmem.tripple_buffer_index];
-        var point_lights_count: usize = 0;
+        point_lights.count = 0;
 
         for (0..gmem.world.entity_count) |i| {
             const ent = &gmem.world.entities[i];
             if (!ent.flags.active) continue;
 
-            if (ent.flags.point_light) {
+            if (ent.flags.rotate) {
+                const old_pos = ent.transform.pos;
                 const new_pos = Mat4.fromRotation(
-                    gmem.rotation,
-                    Vec3.up(),
-                ).mulByVec4(Vec4.new(2, 1, 0, 1));
+                    ent.rotate.rate * gmem.delta_time,
+                    ent.rotate.axis,
+                ).mulByVec4(Vec4.new(old_pos.x(), old_pos.y(), old_pos.z(), 1));
                 ent.transform.pos = Vec3.new(new_pos.x(), new_pos.y(), new_pos.z());
+            }
 
-                point_lights.lights[point_lights_count] = .{
-                    .pos = new_pos,
-                    // .color = ent.point_light.color,
+            if (ent.flags.point_light) {
+                const pos = ent.transform.pos;
+                point_lights.lights[point_lights.count] = .{
+                    .pos_radius = Vec4.new(pos.x(), pos.y(), pos.z(), ent.point_light.radius),
+                    .color_intensity = ent.point_light.color_intensity,
                 };
-                point_lights_count += 1;
-                if (point_lights_count == point_lights.lights.len) {
+                point_lights.count += 1;
+                if (point_lights.count == MAX_POINT_LIGHTS) {
                     break;
                 }
             }
@@ -651,23 +679,28 @@ export fn game_update() bool {
 
     gmem.rotation += 60 * gmem.delta_time;
 
-    // Render meshes
+    // Render meshes and lights
     for (0..gmem.world.entity_count) |i| {
         const ent = &gmem.world.entities[i];
-        if (!ent.flags.active or !ent.flags.mesh) continue;
+        if (!ent.flags.active) continue;
 
-        gl.uniformMatrix4fv(1, 1, gl.FALSE, @ptrCast(&ent.transform.matrix().data));
+        if (ent.flags.mesh or ent.flags.point_light) {
+            const color = if (ent.flags.mesh) ent.mesh.color else ent.point_light.color();
+            gl.uniformMatrix4fv(1, 1, gl.FALSE, @ptrCast(&ent.transform.matrix().data));
+            gl.uniform3fv(2, 1, @ptrCast(&color.data));
 
-        const mesh = g_assetman.resolveMesh(ent.mesh.handle);
-        mesh.positions.bind(Attrib.Position.value());
-        mesh.normals.bind(Attrib.Normal.value());
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
-        gl.drawElements(
-            gl.TRIANGLES,
-            mesh.indices.count,
-            mesh.indices.type,
-            @ptrFromInt(mesh.indices.offset),
-        );
+            const mesh_handle = if (ent.flags.mesh) ent.mesh.handle else a.Meshes.sphere;
+            const mesh = g_assetman.resolveMesh(mesh_handle);
+            mesh.positions.bind(Attrib.Position.value());
+            mesh.normals.bind(Attrib.Normal.value());
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
+            gl.drawElements(
+                gl.TRIANGLES,
+                mesh.indices.count,
+                mesh.indices.type,
+                @ptrFromInt(mesh.indices.offset),
+            );
+        }
     }
 
     c.SDL_GL_SwapWindow(ginit.window);
