@@ -27,18 +27,21 @@ layout(location = 2) uniform vec3 color;
 VERTEX_EXPORT VertexData {
   vec3 position;
   vec3 normal;
+  vec2 uv;
 } VertexOut;
 
 #if VERTEX_SHADER
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNorm;
+layout(location = 2) in vec2 aUV;
 
 void main() {
     gl_Position = projection * view * model * vec4(aPos.xyz, 1.0);
     vec4 posWorld = model * vec4(aPos, 1.0);
     VertexOut.position = posWorld.xyz / posWorld.w;
     VertexOut.normal = aNorm;
+    VertexOut.uv = aUV;
 }
 #endif // VERTEX_SHADER
 
@@ -71,6 +74,8 @@ void main() {
 
   float gamma = 2.2;
   FragColor.rgb = pow(FragColor.rgb, vec3(1.0/gamma));
+
+  FragColor.rgb = vec3(VertexOut.uv, 0);
 }
 
 #endif // FRAGMNET_SHADER

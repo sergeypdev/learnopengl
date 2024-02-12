@@ -214,6 +214,11 @@ const NullMesh = LoadedMesh{
         .offset = 0,
         .stride = 0,
     },
+    .uvs = BufferSlice{
+        .buffer = 0,
+        .offset = 0,
+        .stride = 0,
+    },
     .indices = IndexSlice{
         .buffer = 0,
         .offset = 0,
@@ -234,7 +239,7 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
     const data = try self.loadFile(self.frame_arena, path, MESH_MAX_BYTES);
     const mesh = formats.Mesh.fromBuffer(data.bytes);
 
-    var bufs = [_]gl.GLuint{ 0, 0, 0 };
+    var bufs = [_]gl.GLuint{ 0, 0, 0, 0 };
     gl.createBuffers(bufs.len, &bufs);
     errdefer gl.deleteBuffers(bufs.len, &bufs);
 
@@ -242,7 +247,9 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
     std.debug.assert(vertices != 0);
     const normals = bufs[1];
     std.debug.assert(normals != 0);
-    const indices = bufs[2];
+    const uvs = bufs[2];
+    std.debug.assert(uvs != 0);
+    const indices = bufs[3];
     std.debug.assert(indices != 0);
 
     gl.namedBufferStorage(
@@ -255,6 +262,12 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
         normals,
         @intCast(mesh.normals.len * @sizeOf(formats.Vector3)),
         @ptrCast(mesh.normals),
+        0,
+    );
+    gl.namedBufferStorage(
+        uvs,
+        @intCast(mesh.uvs.len * @sizeOf(formats.Vector2)),
+        @ptrCast(mesh.uvs),
         0,
     );
     gl.namedBufferStorage(
@@ -277,11 +290,16 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
             .offset = 0,
             .stride = @sizeOf(formats.Vector3),
         },
+        .uvs = .{
+            .buffer = uvs,
+            .offset = 0,
+            .stride = @sizeOf(formats.Vector2),
+        },
         .indices = .{
             .buffer = indices,
             .offset = 0,
             .count = @intCast(mesh.indices.len),
-            .type = gl.UNSIGNED_SHORT,
+            .type = gl.UNSIGNED_INT,
         },
     };
 
@@ -307,6 +325,7 @@ const LoadedShaderProgram = struct {
 const LoadedMesh = struct {
     positions: BufferSlice,
     normals: BufferSlice,
+    uvs: BufferSlice,
     indices: IndexSlice,
 };
 
@@ -446,7 +465,7 @@ fn unloadAssetWithDependees(self: *AssetManager, id: AssetId) void {
 
         switch (asset.*) {
             .mesh => |*mesh| {
-                gl.deleteBuffers(3, &[_]gl.GLuint{ mesh.positions.buffer, mesh.normals.buffer, mesh.indices.buffer });
+                gl.deleteBuffers(4, &[_]gl.GLuint{ mesh.positions.buffer, mesh.normals.buffer, mesh.uvs.buffer, mesh.indices.buffer });
             },
             .shader => |*shader| {
                 self.allocator.free(shader.source);

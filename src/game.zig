@@ -40,6 +40,7 @@ const MAX_POINT_LIGHTS = 8;
 const Attrib = enum(gl.GLuint) {
     Position = 0,
     Normal = 1,
+    UV = 2,
 
     pub inline fn value(self: Attrib) gl.GLuint {
         return @intFromEnum(self);
@@ -368,6 +369,12 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     gl.vertexArrayAttribBinding(vao, Attrib.Normal.value(), 1);
     gl.vertexArrayAttribFormat(vao, Attrib.Normal.value(), 3, gl.FLOAT, gl.FALSE, 0);
     gl.enableVertexArrayAttrib(vao, Attrib.Normal.value());
+
+    // uvs
+    // gl.vertexArrayVertexBuffer(vao, 1, normals, 0, @sizeOf(formats.Vector3));
+    gl.vertexArrayAttribBinding(vao, Attrib.UV.value(), 1);
+    gl.vertexArrayAttribFormat(vao, Attrib.UV.value(), 2, gl.FLOAT, gl.FALSE, 0);
+    gl.enableVertexArrayAttrib(vao, Attrib.UV.value());
 
     const PERSISTENT_BUFFER_FLAGS: gl.GLbitfield = gl.MAP_PERSISTENT_BIT | gl.MAP_WRITE_BIT | gl.MAP_COHERENT_BIT;
 
@@ -704,6 +711,7 @@ export fn game_update() bool {
             const mesh = g_assetman.resolveMesh(mesh_handle);
             mesh.positions.bind(Attrib.Position.value());
             mesh.normals.bind(Attrib.Normal.value());
+            mesh.uvs.bind(Attrib.UV.value());
             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
             gl.drawElements(
                 gl.TRIANGLES,

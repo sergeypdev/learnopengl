@@ -1,6 +1,7 @@
 const std = @import("std");
 const formats = @import("formats");
 const asset_manifest = @import("asset_manifest");
+const Vector2 = formats.Vector2;
 const Vector3 = formats.Vector3;
 const c = @cImport({
     @cInclude("assimp/cimport.h");
@@ -68,10 +69,14 @@ fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []con
     const mesh: *c.aiMesh = @ptrCast(scene.mMeshes[0]);
 
     if (mesh.mNormals == null) return error.MissingNormals;
+    if (mesh.mTextureCoords[0] == null) return error.MissingUVs;
+    if (mesh.mNumUVComponents[0] != 2) return error.WrongUVComponents;
 
     var vertices = try allocator.alloc(Vector3, @intCast(mesh.mNumVertices));
     var normals = try allocator.alloc(Vector3, @intCast(mesh.mNumVertices));
-    var indices = try allocator.alloc(u16, @intCast(mesh.mNumFaces * 3)); // triangles
+    var uvs = try allocator.alloc(Vector2, @intCast(mesh.mNumVertices));
+
+    var indices = try allocator.alloc(formats.Index, @intCast(mesh.mNumFaces * 3)); // triangles
 
     for (0..mesh.mNumVertices) |i| {
         vertices[i] = .{
@@ -84,18 +89,28 @@ fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []con
             .y = mesh.mNormals[i].y,
             .z = mesh.mNormals[i].z,
         };
+        uvs[i] = .{
+            .x = mesh.mTextureCoords[0][i].x,
+            .y = mesh.mTextureCoords[0][i].y,
+        };
     }
 
     for (0..mesh.mNumFaces) |i| {
         std.debug.assert(mesh.mFaces[i].mNumIndices == 3);
         for (0..3) |j| {
-            indices[i * 3 + j] = @intCast(mesh.mFaces[i].mIndices[j]);
+            const index = mesh.mFaces[i].mIndices[j];
+            if (index > std.math.maxInt(formats.Index)) {
+                std.log.err("indices out of range for index format: {}\n", .{index});
+                return error.TimeToIncreaseIndexSize;
+            }
+            indices[i * 3 + j] = @intCast(index);
         }
     }
 
     const out_mesh = formats.Mesh{
         .vertices = vertices,
         .normals = normals,
+        .uvs = uvs,
         .indices = indices,
     };
 
