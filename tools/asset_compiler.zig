@@ -116,6 +116,18 @@ fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []con
     }
 
     const out_mesh = formats.Mesh{
+        .aabb = .{
+            .min = formats.Vector3{
+                .x = mesh.mAABB.mMin.x,
+                .y = mesh.mAABB.mMin.y,
+                .z = mesh.mAABB.mMin.z,
+            },
+            .max = formats.Vector3{
+                .x = mesh.mAABB.mMax.x,
+                .y = mesh.mAABB.mMax.y,
+                .z = mesh.mAABB.mMax.z,
+            },
+        },
         .vertices = vertices,
         .normals = normals,
         .uvs = uvs,

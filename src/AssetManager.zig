@@ -21,6 +21,7 @@ const formats = @import("formats.zig");
 const asset_manifest = @import("asset_manifest");
 const assets = @import("assets");
 const basisu = @import("mach-basisu");
+const Vec3 = @import("zalgebra").Vec3;
 
 pub const AssetId = assets.AssetId;
 pub const Handle = assets.Handle;
@@ -91,6 +92,8 @@ pub fn resolveShaderProgram(self: *AssetManager, handle: Handle.ShaderProgram) *
 }
 
 pub fn resolveMesh(self: *AssetManager, handle: Handle.Mesh) *const LoadedMesh {
+    if (handle.id == 0) return &NullMesh;
+
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
         switch (asset.*) {
             .mesh => |*mesh| {
@@ -105,6 +108,7 @@ pub fn resolveMesh(self: *AssetManager, handle: Handle.Mesh) *const LoadedMesh {
 
 pub fn resolveTexture(self: *AssetManager, handle: Handle.Texture) *const LoadedTexture {
     if (handle.id == 0) return &NullTexture;
+
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
         switch (asset.*) {
             .texture => |*texture| {
@@ -219,6 +223,7 @@ const NullShaderProgram = LoadedShaderProgram{
 };
 
 const NullMesh = LoadedMesh{
+    .aabb = .{},
     .positions = BufferSlice{
         .buffer = 0,
         .offset = 0,
@@ -301,6 +306,10 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
     // gl.bindVertexBuffer(_bindingindex: GLuint, _buffer: GLuint, _offset: GLintptr, _stride: GLsizei)
 
     const loaded_mesh = LoadedMesh{
+        .aabb = .{
+            .min = Vec3.new(mesh.aabb.min.x, mesh.aabb.min.y, mesh.aabb.min.z),
+            .max = Vec3.new(mesh.aabb.max.x, mesh.aabb.max.y, mesh.aabb.max.z),
+        },
         .positions = .{
             .buffer = vertices,
             .offset = 0,
@@ -424,6 +433,7 @@ const LoadedShaderProgram = struct {
 };
 
 const LoadedMesh = struct {
+    aabb: AABB,
     positions: BufferSlice,
     normals: BufferSlice,
     uvs: BufferSlice,
@@ -433,6 +443,11 @@ const LoadedMesh = struct {
 const LoadedTexture = struct {
     name: gl.GLuint,
     handle: gl.GLuint64,
+};
+
+pub const AABB = struct {
+    min: Vec3 = Vec3.zero(),
+    max: Vec3 = Vec3.zero(),
 };
 
 pub const BufferSlice = struct {

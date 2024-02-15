@@ -13,9 +13,15 @@ pub const Vector3 = extern struct {
     y: f32,
     z: f32,
 };
+pub const AABB = extern struct {
+    min: Vector3,
+    max: Vector3,
+};
 pub const Index = u32;
 
 pub const Mesh = struct {
+    aabb: AABB,
+
     vertices: []align(1) Vector3,
     normals: []align(1) Vector3,
     uvs: []align(1) Vector2,
@@ -25,6 +31,10 @@ pub const Mesh = struct {
     // TODO: return error
     pub fn fromBuffer(buffer: []u8) Mesh {
         var offset: usize = 0;
+
+        const aabb: AABB = @as(*align(1) AABB, @ptrCast(buffer[offset .. offset + @sizeOf(AABB)])).*;
+        offset += @sizeOf(AABB);
+
         const vert_len = std.mem.readInt(
             usize,
             @ptrCast(buffer[offset .. offset + @sizeOf(usize)]),
@@ -54,6 +64,7 @@ pub const Mesh = struct {
         offset += size;
 
         return .{
+            .aabb = aabb,
             .vertices = vertices,
             .normals = normals,
             .uvs = uvs,
@@ -65,6 +76,13 @@ pub const Mesh = struct {
 pub fn writeMesh(writer: anytype, value: Mesh, endian: std.builtin.Endian) !void {
     std.debug.assert(value.vertices.len == value.normals.len);
 
+    // AABB
+    {
+        try writeVector3(writer, value.aabb.min, endian);
+        try writeVector3(writer, value.aabb.max, endian);
+    }
+
+    // Sizes
     try writer.writeInt(usize, value.vertices.len, endian);
     try writer.writeInt(usize, value.indices.len, endian);
 
