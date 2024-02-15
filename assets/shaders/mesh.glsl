@@ -52,7 +52,7 @@ void main() {
 out vec4 FragColor;
 
 void main() {
-  vec3 diffuseColor = texture(diffuse, VertexOut.uv).rgb;
+  vec3 diffuseColor = textureSize(diffuse, 0) == ivec2(0) ? color : texture(diffuse, VertexOut.uv).rgb;
   vec3 finalColor = vec3(0);
 
   for (int i = 0; i < lights_count; i++) {

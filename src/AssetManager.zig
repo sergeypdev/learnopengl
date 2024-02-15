@@ -104,6 +104,7 @@ pub fn resolveMesh(self: *AssetManager, handle: Handle.Mesh) *const LoadedMesh {
 }
 
 pub fn resolveTexture(self: *AssetManager, handle: Handle.Texture) *const LoadedTexture {
+    if (handle.id == 0) return &NullTexture;
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
         switch (asset.*) {
             .texture => |*texture| {

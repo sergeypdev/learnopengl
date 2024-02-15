@@ -65,6 +65,10 @@ pub const InitMemory = struct {
     syswm_info: c.SDL_SysWMinfo = .{},
 };
 
+pub const Material = struct {
+    diffuse: AssetManager.Handle.Texture = .{},
+};
+
 pub const Entity = struct {
     pub const Flags = packed struct {
         active: bool = false,
@@ -87,6 +91,7 @@ pub const Entity = struct {
     pub const Mesh = struct {
         handle: AssetManager.Handle.Mesh = .{},
         color: Vec3 = Vec3.one(),
+        material: Material = .{},
     };
     pub const PointLight = struct {
         radius: f32 = std.math.floatEps(f32), // should never be 0 or bad things happen
@@ -469,7 +474,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
                 .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3, 0, 0) },
 
                 .flags = .{ .mesh = true },
-                .mesh = .{ .handle = a.Meshes.bunny },
+                .mesh = .{ .handle = a.Meshes.bunny, .material = .{ .diffuse = a.Textures.bunny_tex1 } },
             });
         }
     }
@@ -738,7 +743,7 @@ export fn game_update() bool {
             gl.uniform3fv(2, 1, @ptrCast(&color.data));
             gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
                 3,
-                g_assetman.resolveTexture(a.Textures.@"test").handle,
+                g_assetman.resolveTexture(ent.mesh.material.diffuse).handle,
             );
 
             const mesh_handle = if (ent.flags.mesh) ent.mesh.handle else a.Meshes.sphere;

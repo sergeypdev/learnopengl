@@ -273,7 +273,7 @@ fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const 
             }
         }
 
-        if (std.mem.endsWith(u8, entry.basename, ".png")) {
+        if (std.mem.endsWith(u8, entry.basename, ".png") or std.mem.endsWith(u8, entry.basename, ".jpg")) {
             const run_assetc = b.addRunArtifact(assetc);
             run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
             const out_name = try std.mem.concat(
