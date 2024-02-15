@@ -367,7 +367,7 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
     );
 
     for (0..mip_level_count) |mip_level| {
-        const desc = transcoder.getImageLevelDescriptor(0, 0) catch unreachable;
+        const desc = transcoder.getImageLevelDescriptor(0, @intCast(mip_level)) catch unreachable;
         const out_buf = try self.frame_arena.alloc(
             u8,
             @intCast(try transcoder.calcTranscodedSize(0, @intCast(mip_level), format)),

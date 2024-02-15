@@ -181,6 +181,7 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
     var y: c_int = undefined;
     var comps: c_int = undefined;
 
+    c.stbi_set_flip_vertically_on_load(1);
     const FORCED_COMPONENTS = 3; // force rgb
     const data_c = @as(?[*]u8, @ptrCast(c.stbi_load(input, &x, &y, &comps, FORCED_COMPONENTS))) orelse return error.ImageLoadError;
     defer c.stbi_image_free(data_c);
@@ -197,7 +198,7 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
 
     // TODO: configure per-texture somehow
     params.setQualityLevel(64);
-    params.setBasisFormat(basisu.BasisTextureFormat.etc1s);
+    params.setBasisFormat(basisu.BasisTextureFormat.uastc4x4);
     params.setColorSpace(basisu.ColorSpace.srgb);
     params.setGenerateMipMaps(true);
 
