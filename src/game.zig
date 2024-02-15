@@ -1,6 +1,5 @@
 const std = @import("std");
 const c = @import("sdl.zig");
-const manymouse = @import("manymouse.zig");
 const gl = @import("gl.zig");
 const AssetManager = @import("AssetManager.zig");
 const formats = @import("formats.zig");
@@ -293,13 +292,18 @@ export fn game_init_window(global_allocator: *std.mem.Allocator) void {
 }
 
 fn loadGL() void {
-    gl.load(null, struct {
+    const getProcAddress = struct {
         fn getProcAddress(ctx: @TypeOf(null), proc: [:0]const u8) ?gl.FunctionPointer {
             _ = ctx;
             return @ptrCast(c.SDL_GL_GetProcAddress(proc));
         }
-    }.getProcAddress) catch |err| {
+    }.getProcAddress;
+    gl.load(null, getProcAddress) catch |err| {
         std.log.debug("Failed to load gl funcs {}\n", .{err});
+        @panic("gl.load");
+    };
+    gl.GL_ARB_bindless_texture.load(null, getProcAddress) catch |err| {
+        std.log.debug("Failed to load gl funcs GL_ARB_bindless_texture {}\n", .{err});
         @panic("gl.load");
     };
 }
@@ -377,15 +381,15 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
     // normals
     // gl.vertexArrayVertexBuffer(vao, 1, normals, 0, @sizeOf(formats.Vector3));
+    gl.enableVertexArrayAttrib(vao, Attrib.Normal.value());
     gl.vertexArrayAttribBinding(vao, Attrib.Normal.value(), 1);
     gl.vertexArrayAttribFormat(vao, Attrib.Normal.value(), 3, gl.FLOAT, gl.FALSE, 0);
-    gl.enableVertexArrayAttrib(vao, Attrib.Normal.value());
 
     // uvs
     // gl.vertexArrayVertexBuffer(vao, 1, normals, 0, @sizeOf(formats.Vector3));
-    gl.vertexArrayAttribBinding(vao, Attrib.UV.value(), 1);
-    gl.vertexArrayAttribFormat(vao, Attrib.UV.value(), 2, gl.FLOAT, gl.FALSE, 0);
     gl.enableVertexArrayAttrib(vao, Attrib.UV.value());
+    gl.vertexArrayAttribBinding(vao, Attrib.UV.value(), 2);
+    gl.vertexArrayAttribFormat(vao, Attrib.UV.value(), 2, gl.FLOAT, gl.FALSE, 0);
 
     const PERSISTENT_BUFFER_FLAGS: gl.GLbitfield = gl.MAP_PERSISTENT_BIT | gl.MAP_WRITE_BIT | gl.MAP_COHERENT_BIT;
 
@@ -732,6 +736,10 @@ export fn game_update() bool {
             const color = if (ent.flags.mesh) ent.mesh.color else ent.point_light.color();
             gl.uniformMatrix4fv(1, 1, gl.FALSE, @ptrCast(&ent.transform.matrix().data));
             gl.uniform3fv(2, 1, @ptrCast(&color.data));
+            gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+                3,
+                g_assetman.resolveTexture(a.Textures.@"test").handle,
+            );
 
             const mesh_handle = if (ent.flags.mesh) ent.mesh.handle else a.Meshes.sphere;
             const mesh = g_assetman.resolveMesh(mesh_handle);

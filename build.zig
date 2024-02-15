@@ -22,6 +22,13 @@ pub fn build(b: *Build) void {
         "Prioritize performance, safety, or binary size for build time tools",
     ) orelse .Debug;
 
+    const basisu_optimize = b.option(std.builtin.OptimizeMode, "basisu_optimize", "Optimization level for basisu. ReleaseSafe or faster is recommented, otherwise it's slow or can crash due to ubsan.") orelse .ReleaseFast;
+
+    const basisu_dep = b.dependency("mach-basisu", .{
+        .target = target,
+        .optimize = basisu_optimize,
+    });
+
     const zalgebra_dep = b.dependency("zalgebra", .{});
 
     const assets_mod = b.addModule("assets", .{ .root_source_file = .{ .path = "src/assets/root.zig" } });
@@ -31,7 +38,7 @@ pub fn build(b: *Build) void {
     const assets_step = b.step("assets", "Build and install assets");
     b.getInstallStep().dependOn(assets_step);
 
-    const assetc = buildAssetCompiler(b, assets_step, buildOptimize);
+    const assetc = buildAssetCompiler(b, basisu_optimize, assets_step, buildOptimize);
 
     assetc.root_module.addImport("assets", assets_mod);
     assetc.root_module.addImport("asset_manifest", asset_manifest_mod);
@@ -61,6 +68,8 @@ pub fn build(b: *Build) void {
         l.root_module.addImport("zalgebra", zalgebra_dep.module("zalgebra"));
         l.root_module.addImport("assets", assets_mod);
         l.root_module.addImport("asset_manifest", asset_manifest_mod);
+        l.linkLibrary(basisu_dep.artifact("mach-basisu"));
+        l.root_module.addImport("mach-basisu", basisu_dep.module("mach-basisu"));
     }
 
     const install_lib = b.addInstallArtifact(lib, .{ .dest_dir = .{ .override = .prefix } });
@@ -362,7 +371,7 @@ fn writeAssetManifest(
     return manifest_path;
 }
 
-fn buildAssetCompiler(b: *Build, assets_step: *Step, optimize: std.builtin.OptimizeMode) *Step.Compile {
+fn buildAssetCompiler(b: *Build, basisu_optimize: std.builtin.OptimizeMode, assets_step: *Step, optimize: std.builtin.OptimizeMode) *Step.Compile {
     const assimp_dep = b.dependency("zig-assimp", .{
         .target = b.host,
         .optimize = optimize,
@@ -370,7 +379,6 @@ fn buildAssetCompiler(b: *Build, assets_step: *Step, optimize: std.builtin.Optim
         .formats = @as([]const u8, "Obj"),
     });
 
-    const basisu_optimize = b.option(std.builtin.OptimizeMode, "basisu_optimize", "Optimization level for basisu. ReleaseSafe or faster is recommented, otherwise it's unbearable.") orelse .ReleaseFast;
     const basisu_dep = b.dependency("mach-basisu", .{
         .target = b.host,
         .optimize = basisu_optimize,

@@ -3,6 +3,7 @@ pub const manifest = @import("asset_manifest_gen");
 pub const Meshes = manifest.Meshes;
 pub const Shaders = manifest.Shaders;
 pub const ShaderPrograms = manifest.ShaderPrograms;
+pub const Textures = manifest.Textures;
 
 pub fn getPath(asset_id: u32) []const u8 {
     if (asset_id == 0) return "";

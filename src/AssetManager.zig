@@ -20,20 +20,19 @@ const fs_utils = @import("fs/utils.zig");
 const formats = @import("formats.zig");
 const asset_manifest = @import("asset_manifest");
 const assets = @import("assets");
+const basisu = @import("mach-basisu");
 
 pub const AssetId = assets.AssetId;
 pub const Handle = assets.Handle;
 
 pub const AssetManager = @This();
 
-// const ShaderProgramHandle = struct { id: gl.GLuint };
-// const handle: ShaderProgramHandle = assets.loadShaderProgram(.{ .vertex = "shaders/vertex.glsl", .fragment = "shaders/fragment.glsl" });
-// assets.unloadShaderProgram(handle);
-
 const AssetIdList = std.SegmentedList(AssetId, 4);
+const PowerOfTwo = u16;
 
 const SHADER_MAX_BYTES = 1024 * 1024 * 50;
 const MESH_MAX_BYTES = 1024 * 1024 * 500;
+const TEXTURE_MAX_BYTES = 1024 * 1024 * 500;
 
 allocator: std.mem.Allocator,
 frame_arena: std.mem.Allocator,
@@ -49,6 +48,8 @@ dependees: std.AutoHashMapUnmanaged(AssetId, std.SegmentedList(AssetId, 4)) = .{
 loaded_assets: std.AutoHashMapUnmanaged(AssetId, LoadedAsset) = .{},
 
 pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator) AssetManager {
+    basisu.init_transcoder();
+
     var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const exe_dir_path = std.fs.selfExeDirPath(&buf) catch @panic("can't find self exe dir path");
     const exe_dir = std.fs.openDirAbsolute(exe_dir_path, .{}) catch @panic("can't open self exe dir path");
@@ -100,6 +101,19 @@ pub fn resolveMesh(self: *AssetManager, handle: Handle.Mesh) *const LoadedMesh {
     }
 
     return self.loadMesh(handle.id);
+}
+
+pub fn resolveTexture(self: *AssetManager, handle: Handle.Texture) *const LoadedTexture {
+    if (self.loaded_assets.getPtr(handle.id)) |asset| {
+        switch (asset.*) {
+            .texture => |*texture| {
+                return texture;
+            },
+            else => unreachable,
+        }
+    }
+
+    return self.loadTexture(handle.id);
 }
 
 // TODO: proper watching
@@ -227,6 +241,12 @@ const NullMesh = LoadedMesh{
     },
 };
 
+// TODO: create empty texture instead, this will crash
+const NullTexture = LoadedTexture{
+    .name = 0,
+    .handle = 0,
+};
+
 pub fn loadMesh(self: *AssetManager, id: AssetId) *const LoadedMesh {
     return self.loadMeshErr(id) catch |err| {
         std.log.err("Error: {} loading mesh at path: {s}", .{ err, asset_manifest.getPath(id) });
@@ -308,10 +328,90 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
     return &self.loaded_assets.getPtr(id).?.mesh;
 }
 
+fn loadTexture(self: *AssetManager, id: AssetId) *const LoadedTexture {
+    return self.loadTextureErr(id) catch |err| {
+        std.log.err("Error: {} loading texture at path {s}\n", .{ err, asset_manifest.getPath(id) });
+
+        return &NullTexture;
+    };
+}
+
+fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
+    const path = asset_manifest.getPath(id);
+    const data = try self.loadFile(self.frame_arena, path, TEXTURE_MAX_BYTES);
+
+    const transcoder = try basisu.Transcoder.init(data.bytes);
+    defer transcoder.deinit();
+
+    std.debug.assert(transcoder.getImageCount() == 1); // Not supporting multiple textures yet
+
+    const mip_level_count = transcoder.getImageLevelCount(0);
+    const mip_0_desc = transcoder.getImageLevelDescriptor(0, 0) catch unreachable;
+
+    var name: gl.GLuint = 0;
+    gl.createTextures(gl.TEXTURE_2D, 1, &name);
+    if (name == 0) {
+        return error.GLCreateTexture;
+    }
+    errdefer gl.deleteTextures(1, &name);
+
+    // TODO: query supported formats first in the future
+    const format = basisu.Transcoder.TextureFormat.bc7_rgba;
+
+    gl.textureStorage2D(
+        name,
+        @intCast(mip_level_count),
+        gl.COMPRESSED_SRGB_ALPHA_BPTC_UNORM,
+        @intCast(mip_0_desc.original_width),
+        @intCast(mip_0_desc.original_height),
+    );
+
+    for (0..mip_level_count) |mip_level| {
+        const desc = transcoder.getImageLevelDescriptor(0, 0) catch unreachable;
+        const out_buf = try self.frame_arena.alloc(
+            u8,
+            @intCast(try transcoder.calcTranscodedSize(0, @intCast(mip_level), format)),
+        );
+
+        try transcoder.transcode(out_buf, 0, @intCast(mip_level), format, .{});
+
+        gl.compressedTextureSubImage2D(
+            name,
+            @intCast(mip_level),
+            0,
+            0,
+            @intCast(desc.original_width),
+            @intCast(desc.original_height),
+            gl.COMPRESSED_SRGB_ALPHA_BPTC_UNORM,
+            @intCast(out_buf.len),
+            @ptrCast(out_buf.ptr),
+        );
+    }
+
+    const handle = gl.GL_ARB_bindless_texture.getTextureHandleARB(name);
+    gl.GL_ARB_bindless_texture.makeTextureHandleResidentARB(handle);
+    errdefer gl.GL_ARB_bindless_texture.makeTextureHandleNonResidentARB(handle);
+
+    try self.loaded_assets.put(
+        self.allocator,
+        id,
+        .{
+            .texture = LoadedTexture{
+                .name = name,
+                .handle = handle,
+            },
+        },
+    );
+    try self.modified_times.put(self.allocator, id, data.modified);
+
+    return &self.loaded_assets.getPtr(id).?.texture;
+}
+
 const LoadedAsset = union(enum) {
     shader: LoadedShader,
     shaderProgram: LoadedShaderProgram,
     mesh: LoadedMesh,
+    texture: LoadedTexture,
 };
 
 const LoadedShader = struct {
@@ -327,6 +427,11 @@ const LoadedMesh = struct {
     normals: BufferSlice,
     uvs: BufferSlice,
     indices: IndexSlice,
+};
+
+const LoadedTexture = struct {
+    name: gl.GLuint,
+    handle: gl.GLuint64,
 };
 
 pub const BufferSlice = struct {
@@ -472,6 +577,10 @@ fn unloadAssetWithDependees(self: *AssetManager, id: AssetId) void {
             },
             .shaderProgram => |*program| {
                 gl.deleteProgram(program.program);
+            },
+            .texture => |*texture| {
+                gl.GL_ARB_bindless_texture.makeTextureHandleNonResidentARB(texture.handle);
+                gl.deleteTextures(1, &texture.name);
             },
         }
     }

@@ -7,12 +7,12 @@
 // Generation parameters:
 // API:        GL_VERSION_4_5
 // Profile:    core
-// Extensions: 
+// Extensions: GL_ARB_bindless_texture
 //
 
 //
 // This file was generated with the following command line:
-// generator C:\Users\Серега\git\zig-opengl\bin\Debug\net7.0\generator.dll OpenGL-Registry/xml/gl.xml gl.zig GL_VERSION_4_5
+// generator C:\git\zig-opengl\bin\Debug\net7.0\generator.dll OpenGL-Registry\xml\gl.xml gl.zig GL_VERSION_4_5 GL_ARB_bindless_texture
 //
 
 const std = @import("std");
@@ -4030,6 +4030,177 @@ pub fn textureBarrier() callconv(.C) void {
     return @call(.always_tail, function_pointers.glTextureBarrier, .{});
 }
 // Extensions:
+
+pub const GL_ARB_bindless_texture = struct {
+pub const UNSIGNED_INT64_ARB = 0x140F;
+
+
+pub fn getTextureHandleARB(_texture: GLuint) callconv(.C) GLuint64 {
+    return @call(.always_tail, function_pointers.glGetTextureHandleARB, .{_texture});
+}
+
+pub fn getTextureSamplerHandleARB(_texture: GLuint, _sampler: GLuint) callconv(.C) GLuint64 {
+    return @call(.always_tail, function_pointers.glGetTextureSamplerHandleARB, .{_texture, _sampler});
+}
+
+pub fn makeTextureHandleResidentARB(_handle: GLuint64) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glMakeTextureHandleResidentARB, .{_handle});
+}
+
+pub fn makeTextureHandleNonResidentARB(_handle: GLuint64) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glMakeTextureHandleNonResidentARB, .{_handle});
+}
+
+pub fn getImageHandleARB(_texture: GLuint, _level: GLint, _layered: GLboolean, _layer: GLint, _format: GLenum) callconv(.C) GLuint64 {
+    return @call(.always_tail, function_pointers.glGetImageHandleARB, .{_texture, _level, _layered, _layer, _format});
+}
+
+pub fn makeImageHandleResidentARB(_handle: GLuint64, _access: GLenum) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glMakeImageHandleResidentARB, .{_handle, _access});
+}
+
+pub fn makeImageHandleNonResidentARB(_handle: GLuint64) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glMakeImageHandleNonResidentARB, .{_handle});
+}
+
+pub fn uniformHandleui64ARB(_location: GLint, _value: GLuint64) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glUniformHandleui64ARB, .{_location, _value});
+}
+
+pub fn uniformHandleui64vARB(_location: GLint, _count: GLsizei, _value: [*c]const GLuint64) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glUniformHandleui64vARB, .{_location, _count, _value});
+}
+
+pub fn programUniformHandleui64ARB(_program: GLuint, _location: GLint, _value: GLuint64) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glProgramUniformHandleui64ARB, .{_program, _location, _value});
+}
+
+pub fn programUniformHandleui64vARB(_program: GLuint, _location: GLint, _count: GLsizei, _values: [*c]const GLuint64) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glProgramUniformHandleui64vARB, .{_program, _location, _count, _values});
+}
+
+pub fn isTextureHandleResidentARB(_handle: GLuint64) callconv(.C) GLboolean {
+    return @call(.always_tail, function_pointers.glIsTextureHandleResidentARB, .{_handle});
+}
+
+pub fn isImageHandleResidentARB(_handle: GLuint64) callconv(.C) GLboolean {
+    return @call(.always_tail, function_pointers.glIsImageHandleResidentARB, .{_handle});
+}
+
+pub fn vertexAttribL1ui64ARB(_index: GLuint, _x: GLuint64EXT) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glVertexAttribL1ui64ARB, .{_index, _x});
+}
+
+pub fn vertexAttribL1ui64vARB(_index: GLuint, _v: [*c]const GLuint64EXT) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glVertexAttribL1ui64vARB, .{_index, _v});
+}
+
+pub fn getVertexAttribLui64vARB(_index: GLuint, _pname: GLenum, _params: [*c]GLuint64EXT) callconv(.C) void {
+    return @call(.always_tail, function_pointers.glGetVertexAttribLui64vARB, .{_index, _pname, _params});
+}
+
+pub fn load(load_ctx: anytype, get_proc_address: fn(@TypeOf(load_ctx), [:0]const u8) ?FunctionPointer) !void {
+    var success = true;
+    if(get_proc_address(load_ctx, "glGetTextureHandleARB")) |proc| {
+        function_pointers.glGetTextureHandleARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glGetTextureHandleARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glGetTextureSamplerHandleARB")) |proc| {
+        function_pointers.glGetTextureSamplerHandleARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glGetTextureSamplerHandleARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glMakeTextureHandleResidentARB")) |proc| {
+        function_pointers.glMakeTextureHandleResidentARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glMakeTextureHandleResidentARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glMakeTextureHandleNonResidentARB")) |proc| {
+        function_pointers.glMakeTextureHandleNonResidentARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glMakeTextureHandleNonResidentARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glGetImageHandleARB")) |proc| {
+        function_pointers.glGetImageHandleARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glGetImageHandleARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glMakeImageHandleResidentARB")) |proc| {
+        function_pointers.glMakeImageHandleResidentARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glMakeImageHandleResidentARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glMakeImageHandleNonResidentARB")) |proc| {
+        function_pointers.glMakeImageHandleNonResidentARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glMakeImageHandleNonResidentARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glUniformHandleui64ARB")) |proc| {
+        function_pointers.glUniformHandleui64ARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glUniformHandleui64ARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glUniformHandleui64vARB")) |proc| {
+        function_pointers.glUniformHandleui64vARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glUniformHandleui64vARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glProgramUniformHandleui64ARB")) |proc| {
+        function_pointers.glProgramUniformHandleui64ARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glProgramUniformHandleui64ARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glProgramUniformHandleui64vARB")) |proc| {
+        function_pointers.glProgramUniformHandleui64vARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glProgramUniformHandleui64vARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glIsTextureHandleResidentARB")) |proc| {
+        function_pointers.glIsTextureHandleResidentARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glIsTextureHandleResidentARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glIsImageHandleResidentARB")) |proc| {
+        function_pointers.glIsImageHandleResidentARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glIsImageHandleResidentARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glVertexAttribL1ui64ARB")) |proc| {
+        function_pointers.glVertexAttribL1ui64ARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glVertexAttribL1ui64ARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glVertexAttribL1ui64vARB")) |proc| {
+        function_pointers.glVertexAttribL1ui64vARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glVertexAttribL1ui64vARB not found!", .{});
+        success = false;
+    }
+    if(get_proc_address(load_ctx, "glGetVertexAttribLui64vARB")) |proc| {
+        function_pointers.glGetVertexAttribLui64vARB = @ptrCast(proc);
+    } else {
+        log.err("entry point glGetVertexAttribLui64vARB not found!", .{});
+        success = false;
+    }
+    if(!success)
+        return error.EntryPointNotFound;
+}
+};
 
 // Loader API:
 pub fn load(load_ctx: anytype, get_proc_address: fn(@TypeOf(load_ctx), [:0]const u8) ?FunctionPointer) !void {
@@ -8610,6 +8781,22 @@ const function_signatures = struct {
     const glGetnUniformuiv = fn(_program: GLuint, _location: GLint, _bufSize: GLsizei, _params: [*c]GLuint) callconv(.C) void;
     const glReadnPixels = fn(_x: GLint, _y: GLint, _width: GLsizei, _height: GLsizei, _format: GLenum, _type: GLenum, _bufSize: GLsizei, _data: ?*anyopaque) callconv(.C) void;
     const glTextureBarrier = fn() callconv(.C) void;
+    const glGetTextureHandleARB = fn(_texture: GLuint) callconv(.C) GLuint64;
+    const glGetTextureSamplerHandleARB = fn(_texture: GLuint, _sampler: GLuint) callconv(.C) GLuint64;
+    const glMakeTextureHandleResidentARB = fn(_handle: GLuint64) callconv(.C) void;
+    const glMakeTextureHandleNonResidentARB = fn(_handle: GLuint64) callconv(.C) void;
+    const glGetImageHandleARB = fn(_texture: GLuint, _level: GLint, _layered: GLboolean, _layer: GLint, _format: GLenum) callconv(.C) GLuint64;
+    const glMakeImageHandleResidentARB = fn(_handle: GLuint64, _access: GLenum) callconv(.C) void;
+    const glMakeImageHandleNonResidentARB = fn(_handle: GLuint64) callconv(.C) void;
+    const glUniformHandleui64ARB = fn(_location: GLint, _value: GLuint64) callconv(.C) void;
+    const glUniformHandleui64vARB = fn(_location: GLint, _count: GLsizei, _value: [*c]const GLuint64) callconv(.C) void;
+    const glProgramUniformHandleui64ARB = fn(_program: GLuint, _location: GLint, _value: GLuint64) callconv(.C) void;
+    const glProgramUniformHandleui64vARB = fn(_program: GLuint, _location: GLint, _count: GLsizei, _values: [*c]const GLuint64) callconv(.C) void;
+    const glIsTextureHandleResidentARB = fn(_handle: GLuint64) callconv(.C) GLboolean;
+    const glIsImageHandleResidentARB = fn(_handle: GLuint64) callconv(.C) GLboolean;
+    const glVertexAttribL1ui64ARB = fn(_index: GLuint, _x: GLuint64EXT) callconv(.C) void;
+    const glVertexAttribL1ui64vARB = fn(_index: GLuint, _v: [*c]const GLuint64EXT) callconv(.C) void;
+    const glGetVertexAttribLui64vARB = fn(_index: GLuint, _pname: GLenum, _params: [*c]GLuint64EXT) callconv(.C) void;
 };
 
 const function_pointers = struct {
@@ -9266,6 +9453,22 @@ const function_pointers = struct {
     var glGetnUniformuiv: *const function_signatures.glGetnUniformuiv = undefined;
     var glReadnPixels: *const function_signatures.glReadnPixels = undefined;
     var glTextureBarrier: *const function_signatures.glTextureBarrier = undefined;
+    var glGetTextureHandleARB: *const function_signatures.glGetTextureHandleARB = undefined;
+    var glGetTextureSamplerHandleARB: *const function_signatures.glGetTextureSamplerHandleARB = undefined;
+    var glMakeTextureHandleResidentARB: *const function_signatures.glMakeTextureHandleResidentARB = undefined;
+    var glMakeTextureHandleNonResidentARB: *const function_signatures.glMakeTextureHandleNonResidentARB = undefined;
+    var glGetImageHandleARB: *const function_signatures.glGetImageHandleARB = undefined;
+    var glMakeImageHandleResidentARB: *const function_signatures.glMakeImageHandleResidentARB = undefined;
+    var glMakeImageHandleNonResidentARB: *const function_signatures.glMakeImageHandleNonResidentARB = undefined;
+    var glUniformHandleui64ARB: *const function_signatures.glUniformHandleui64ARB = undefined;
+    var glUniformHandleui64vARB: *const function_signatures.glUniformHandleui64vARB = undefined;
+    var glProgramUniformHandleui64ARB: *const function_signatures.glProgramUniformHandleui64ARB = undefined;
+    var glProgramUniformHandleui64vARB: *const function_signatures.glProgramUniformHandleui64vARB = undefined;
+    var glIsTextureHandleResidentARB: *const function_signatures.glIsTextureHandleResidentARB = undefined;
+    var glIsImageHandleResidentARB: *const function_signatures.glIsImageHandleResidentARB = undefined;
+    var glVertexAttribL1ui64ARB: *const function_signatures.glVertexAttribL1ui64ARB = undefined;
+    var glVertexAttribL1ui64vARB: *const function_signatures.glVertexAttribL1ui64vARB = undefined;
+    var glGetVertexAttribLui64vARB: *const function_signatures.glGetVertexAttribLui64vARB = undefined;
 };
 
 test {

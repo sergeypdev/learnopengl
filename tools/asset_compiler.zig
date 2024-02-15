@@ -195,9 +195,10 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
     const img = params.getImageSource(0);
     img.fill(data, @intCast(x), @intCast(y), @intCast(FORCED_COMPONENTS));
 
+    // TODO: configure per-texture somehow
     params.setQualityLevel(64);
     params.setBasisFormat(basisu.BasisTextureFormat.etc1s);
-    // params.setColorSpace(basisu.ColorSpace.linear);
+    params.setColorSpace(basisu.ColorSpace.srgb);
     params.setGenerateMipMaps(true);
 
     var compressor = try basisu.Compressor.init(params);

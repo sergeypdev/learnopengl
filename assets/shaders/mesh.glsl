@@ -1,3 +1,4 @@
+#extension GL_ARB_bindless_texture : enable
 // Keep in sync with cpu
 #define MAX_POINT_LIGHTS 8
 
@@ -21,6 +22,7 @@ layout(std140, binding = 1) uniform Lights {
 // Uniforms
 layout(location = 1) uniform mat4 model;
 layout(location = 2) uniform vec3 color;
+layout(location = 3, bindless_sampler) uniform sampler2D diffuse;
 
 // Input, output blocks
 
@@ -50,7 +52,7 @@ void main() {
 out vec4 FragColor;
 
 void main() {
-  vec3 diffuseColor = color;
+  vec3 diffuseColor = texture(diffuse, VertexOut.uv).rgb;
   vec3 finalColor = vec3(0);
 
   for (int i = 0; i < lights_count; i++) {
