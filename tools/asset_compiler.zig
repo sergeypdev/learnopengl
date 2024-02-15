@@ -10,8 +10,9 @@ const c = @cImport({
     @cInclude("assimp/postprocess.h");
 
     @cInclude("stb_image.h");
+
+    @cInclude("ispc_texcomp.h");
 });
-const basisu = @import("mach-basisu");
 
 const ASSET_MAX_BYTES = 1024 * 1024 * 1024;
 
@@ -20,6 +21,7 @@ const AssetType = enum {
     Shader,
     ShaderProgram,
     Texture,
+    HDRTexture,
 };
 
 pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
@@ -34,6 +36,9 @@ pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
     }
     if (std.mem.endsWith(u8, path, ".png") or std.mem.endsWith(u8, path, ".jpg")) {
         return .Texture;
+    }
+    if (std.mem.endsWith(u8, path, ".exr")) {
+        return .HDRTexture;
     }
     return null;
 }
@@ -54,7 +59,8 @@ pub fn main() !void {
     switch (asset_type) {
         .Mesh => try processMesh(allocator, input, output),
         .ShaderProgram => try processShaderProgram(allocator, std.mem.span(input), output),
-        .Texture => try processTexture(allocator, input, output),
+        .Texture => try processTexture(allocator, input, output, false),
+        .HDRTexture => try processTexture(allocator, input, output, true),
         else => return error.CantProcessAssetType,
     }
 }
@@ -187,42 +193,67 @@ fn processShaderProgram(allocator: std.mem.Allocator, absolute_input: []const u8
     try buf_writer.flush();
 }
 
-fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []const u8) !void {
-    _ = allocator; // autofix
-    var x: c_int = undefined;
-    var y: c_int = undefined;
+fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []const u8, hdr: bool) !void {
+    _ = hdr; // autofix
+    var width_int: c_int = undefined;
+    var height_int: c_int = undefined;
     var comps: c_int = undefined;
 
     c.stbi_set_flip_vertically_on_load(1);
-    const FORCED_COMPONENTS = 3; // force rgb
-    const data_c = @as(?[*]u8, @ptrCast(c.stbi_load(input, &x, &y, &comps, FORCED_COMPONENTS))) orelse return error.ImageLoadError;
+    // const FORCED_COMPONENTS = 3; // force rgb
+    const data_c = c.stbi_load(input, &width_int, &height_int, &comps, 0);
+    if (data_c == null) {
+        return error.ImageLoadError;
+    }
     defer c.stbi_image_free(data_c);
 
-    const data = data_c[0 .. @as(usize, @intCast(x)) * @as(usize, @intCast(y)) * FORCED_COMPONENTS];
+    const width: usize = @intCast(width_int);
+    const height: usize = @intCast(height_int);
 
-    basisu.init_encoder();
+    // TODO: support textures not divisible by 4
+    if (width % 4 != 0 or height % 4 != 0) {
+        std.log.debug("Image size: {}X{}\n", .{ width, height });
+        return error.ImageSizeShouldBeDivisibleBy4;
+    }
 
-    var params = basisu.CompressorParams.init(@intCast(try std.Thread.getCpuCount()));
-    defer params.deinit();
+    const blocks_x: usize = width / 4;
+    const blocks_y: usize = height / 4;
 
-    const img = params.getImageSource(0);
-    img.fill(data, @intCast(x), @intCast(y), @intCast(FORCED_COMPONENTS));
+    const rgba_surf = c.rgba_surface{
+        .ptr = data_c,
+        .width = @intCast(blocks_x),
+        .height = @intCast(blocks_y),
+        .stride = width_int * comps,
+    };
+    var settings: c.bc7_enc_settings = undefined;
 
-    // TODO: configure per-texture somehow
-    params.setQualityLevel(64);
-    params.setBasisFormat(basisu.BasisTextureFormat.uastc4x4);
-    params.setColorSpace(basisu.ColorSpace.srgb);
-    params.setGenerateMipMaps(true);
+    if (comps == 3) {
+        c.GetProfile_fast(&settings);
+    } else if (comps == 4) {
+        c.GetProfile_alpha_fast(&settings);
+    } else {
+        std.log.debug("Channel count: {}\n", .{comps});
+        return error.UnsupportedChannelCount;
+    }
 
-    var compressor = try basisu.Compressor.init(params);
-    defer compressor.deinit();
+    const out_data = try allocator.alignedAlloc(u8, 16, blocks_x * blocks_y * 16);
 
-    try compressor.process();
+    c.CompressBlocksBC7(&rgba_surf, out_data.ptr, &settings);
+
+    const texture = formats.Texture{
+        .header = .{
+            .format = .bc7_srgb,
+            .width = @intCast(width),
+            .height = @intCast(height),
+            .mip_levels = 1,
+        },
+        .data = out_data,
+    };
 
     const out_file = try std.fs.createFileAbsolute(output, .{});
     defer out_file.close();
     var buf_writer = std.io.bufferedWriter(out_file.writer());
 
-    try buf_writer.writer().writeAll(compressor.output());
+    try formats.writeTexture(buf_writer.writer(), texture);
     try buf_writer.flush();
 }

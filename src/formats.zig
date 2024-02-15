@@ -158,3 +158,64 @@ fn writeFloat(writer: anytype, value: f32, endian: std.builtin.Endian) !void {
     const val: u32 = @bitCast(value);
     try writer.writeInt(u32, val, endian);
 }
+
+pub const Texture = struct {
+    pub const Format = enum(u32) {
+        bc5, // uncorrelated 2 channel, used for normal maps
+        bc6, // f16 for hdr textures
+        bc7, // normal rgba textures, assumed linear colors
+        bc7_srgb, // normal rgba textures, assumed srgb
+    };
+
+    pub const MAGIC = [_]u8{ 'T', 'X', 'F', 'M' };
+
+    pub const Header = extern struct {
+        magic: [4]u8 = MAGIC,
+        format: Format,
+        mip_levels: u32,
+        width: u32,
+        height: u32,
+    };
+
+    header: Header,
+    data: []u8,
+
+    pub fn fromBuffer(buf: []u8) !Texture {
+        const header: *align(1) Header = @ptrCast(buf.ptr);
+
+        if (!std.mem.eql(u8, &header.magic, &MAGIC)) {
+            return error.MagicMatch;
+        }
+
+        return Texture{
+            .header = header.*,
+            .data = buf[@sizeOf(Header)..],
+        };
+    }
+};
+
+// TODO: this doesn't respect endiannes at all
+pub fn writeTexture(writer: anytype, value: Texture) !void {
+    try writer.writeStruct(value.header);
+    try writer.writeAll(value.data);
+}
+
+test "texture write/parse" {
+    var data = [_]u8{ 'h', 'e', 'l', 'l', 'o' };
+    const source = Texture{
+        .header = .{
+            .format = .bc7_srgb,
+            .width = 123,
+            .height = 234,
+            .mip_levels = 1,
+        },
+        .data = &data,
+    };
+
+    var buf: [@sizeOf(Texture.Header) + data.len]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeTexture(stream.writer(), source);
+
+    const decoded = try Texture.fromBuffer(&buf);
+    try std.testing.expectEqualDeep(source, decoded);
+}

@@ -305,9 +305,6 @@ export fn game_update() bool {
     // TODO: make this an entity
     gmem.free_cam.update(gmem.delta_time, move, look.scale(0.008));
 
-    // RENDER
-    // gl.fenceSync(_condition: GLenum, _flags: GLbitfield)
-
     const f_width: f32 = @floatFromInt(ginit.width);
     const f_height: f32 = @floatFromInt(ginit.height);
 
@@ -453,7 +450,4 @@ fn toggleFullScreen() !void {
     }
 
     ginit.fullscreen = !ginit.fullscreen;
-
-    // c.SDL_GL_GetDrawableSize(ginit.window, &ginit.width, &ginit.height);
-    // gl.viewport(0, 0, ginit.width, ginit.height);
 }

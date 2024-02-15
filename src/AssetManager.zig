@@ -247,7 +247,6 @@ const NullMesh = LoadedMesh{
     },
 };
 
-// TODO: create empty texture instead, this will crash
 const NullTexture = LoadedTexture{
     .name = 0,
     .handle = 0,

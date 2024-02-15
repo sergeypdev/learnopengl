@@ -38,12 +38,15 @@ pub fn build(b: *Build) void {
     const assets_step = b.step("assets", "Build and install assets");
     b.getInstallStep().dependOn(assets_step);
 
-    const assetc = buildAssetCompiler(b, basisu_optimize, assets_step, buildOptimize);
+    const assetc = buildAssetCompiler(b, buildOptimize);
+
+    const install_assetc_step = b.addInstallArtifact(assetc, .{ .dest_dir = .{ .override = .prefix } });
+    assets_step.dependOn(&install_assetc_step.step);
 
     assetc.root_module.addImport("assets", assets_mod);
     assetc.root_module.addImport("asset_manifest", asset_manifest_mod);
 
-    const gen_asset_manifest = buildAssets(b, assets_step, assetc, "assets") catch |err| {
+    const gen_asset_manifest = buildAssets(b, &install_assetc_step.step, assets_step, assetc, "assets") catch |err| {
         std.log.err("Failed to build assets {}\n", .{err});
         @panic("buildAssets");
     };
@@ -185,7 +188,7 @@ const NestedAssetDef = union(enum) {
 };
 
 // Find all assets and cook them using assetc
-fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const u8) !Build.LazyPath {
+fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *Step.Compile, path: []const u8) !Build.LazyPath {
     const assetsPath = b.pathFromRoot(path);
     defer b.allocator.free(assetsPath);
     var assetsDir = try std.fs.openDirAbsolute(assetsPath, .{ .iterate = true });
@@ -204,6 +207,9 @@ fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const 
     while (try walker.next()) |entry| {
         if (std.mem.endsWith(u8, entry.basename, ".obj")) {
             const run_assetc = b.addRunArtifact(assetc);
+            run_assetc.step.dependOn(install_assetc_step);
+            run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
+
             run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
             const out_name = try std.mem.concat(
                 b.allocator,
@@ -251,6 +257,9 @@ fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const 
         // Shader program
         if (std.mem.endsWith(u8, entry.basename, ".prog")) {
             const run_assetc = b.addRunArtifact(assetc);
+            run_assetc.step.dependOn(install_assetc_step);
+            run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
+
             run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
             const compiled_file = run_assetc.addOutputFileArg(b.dupe(entry.basename));
 
@@ -273,13 +282,16 @@ fn buildAssets(b: *std.Build, step: *Step, assetc: *Step.Compile, path: []const 
             }
         }
 
-        if (std.mem.endsWith(u8, entry.basename, ".png") or std.mem.endsWith(u8, entry.basename, ".jpg")) {
+        if (std.mem.endsWith(u8, entry.basename, ".png") or std.mem.endsWith(u8, entry.basename, ".jpg") or std.mem.endsWith(u8, entry.basename, ".exr")) {
             const run_assetc = b.addRunArtifact(assetc);
+            run_assetc.step.dependOn(install_assetc_step);
+            run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
+
             run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
             const out_name = try std.mem.concat(
                 b.allocator,
                 u8,
-                &.{ std.fs.path.stem(entry.basename), ".bu" }, // basisu
+                &.{ std.fs.path.stem(entry.basename), ".tex" }, // basisu
             );
             const compiled_file = run_assetc.addOutputFileArg(out_name);
 
@@ -371,7 +383,7 @@ fn writeAssetManifest(
     return manifest_path;
 }
 
-fn buildAssetCompiler(b: *Build, basisu_optimize: std.builtin.OptimizeMode, assets_step: *Step, optimize: std.builtin.OptimizeMode) *Step.Compile {
+fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode) *Step.Compile {
     const assimp_dep = b.dependency("zig-assimp", .{
         .target = b.host,
         .optimize = optimize,
@@ -379,13 +391,7 @@ fn buildAssetCompiler(b: *Build, basisu_optimize: std.builtin.OptimizeMode, asse
         .formats = @as([]const u8, "Obj"),
     });
 
-    const basisu_dep = b.dependency("mach-basisu", .{
-        .target = b.host,
-        .optimize = basisu_optimize,
-    });
-
     const assimp_lib = assimp_dep.artifact("assimp");
-    const basisu_lib = basisu_dep.artifact("mach-basisu");
 
     const assetc = b.addExecutable(.{
         .name = "assetc",
@@ -393,19 +399,22 @@ fn buildAssetCompiler(b: *Build, basisu_optimize: std.builtin.OptimizeMode, asse
         .root_source_file = .{ .path = "tools/asset_compiler.zig" },
         .optimize = optimize,
     });
+    assetc.linkLibC();
+
+    b.installFile("libs/ispc_texcomp/lib/ispc_texcomp.dll", "ispc_texcomp.dll");
+    b.installFile("libs/ispc_texcomp/lib/ispc_texcomp.pdb", "ispc_texcomp.pdb");
+    assetc.addLibraryPath(.{ .path = "libs/ispc_texcomp/lib" });
+    assetc.addIncludePath(.{ .path = "libs/ispc_texcomp/include" });
+    assetc.linkSystemLibrary("ispc_texcomp");
 
     assetc.root_module.addAnonymousImport("formats", .{ .root_source_file = .{ .path = "src/formats.zig" } });
-    assetc.root_module.addImport("mach-basisu", basisu_dep.module("mach-basisu"));
 
     assetc.linkLibrary(assimp_lib);
-    assetc.linkLibrary(basisu_lib);
     assetc.linkLibC();
     assetc.linkLibCpp();
 
-    assetc.addCSourceFile(.{ .file = .{ .path = "tools/stb/stb_image.c" }, .flags = &.{"-std=c99"} });
-    assetc.addIncludePath(.{ .path = "tools/stb" });
+    assetc.addCSourceFile(.{ .file = .{ .path = "libs/stb/stb_image.c" }, .flags = &.{"-std=c99"} });
+    assetc.addIncludePath(.{ .path = "libs/stb" });
 
-    const install_step = b.addInstallArtifact(assetc, .{ .dest_dir = .{ .override = .prefix } });
-    assets_step.dependOn(&install_step.step);
     return assetc;
 }
