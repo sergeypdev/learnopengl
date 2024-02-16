@@ -200,8 +200,8 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
     var comps: c_int = undefined;
 
     c.stbi_set_flip_vertically_on_load(1);
-    // const FORCED_COMPONENTS = 3; // force rgb
-    const data_c = c.stbi_load(input, &width_int, &height_int, &comps, 0);
+    const FORCED_COMPONENTS = 4; // force rgb
+    const data_c = c.stbi_load(input, &width_int, &height_int, &comps, FORCED_COMPONENTS);
     if (data_c == null) {
         return error.ImageLoadError;
     }
@@ -221,22 +221,22 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
 
     const rgba_surf = c.rgba_surface{
         .ptr = data_c,
-        .width = @intCast(blocks_x),
-        .height = @intCast(blocks_y),
-        .stride = width_int * comps,
+        .width = @intCast(width),
+        .height = @intCast(height),
+        .stride = width_int * FORCED_COMPONENTS,
     };
     var settings: c.bc7_enc_settings = undefined;
 
     if (comps == 3) {
-        c.GetProfile_fast(&settings);
+        c.GetProfile_ultrafast(&settings);
     } else if (comps == 4) {
-        c.GetProfile_alpha_fast(&settings);
+        c.GetProfile_alpha_ultrafast(&settings);
     } else {
         std.log.debug("Channel count: {}\n", .{comps});
         return error.UnsupportedChannelCount;
     }
 
-    const out_data = try allocator.alignedAlloc(u8, 16, blocks_x * blocks_y * 16);
+    const out_data = try allocator.alloc(u8, blocks_x * blocks_y * 16);
 
     c.CompressBlocksBC7(&rgba_surf, out_data.ptr, &settings);
 
@@ -246,6 +246,7 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
             .width = @intCast(width),
             .height = @intCast(height),
             .mip_levels = 1,
+            .size = @intCast(out_data.len),
         },
         .data = out_data,
     };

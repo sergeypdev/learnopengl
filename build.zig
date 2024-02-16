@@ -22,13 +22,6 @@ pub fn build(b: *Build) void {
         "Prioritize performance, safety, or binary size for build time tools",
     ) orelse .Debug;
 
-    const basisu_optimize = b.option(std.builtin.OptimizeMode, "basisu_optimize", "Optimization level for basisu. ReleaseSafe or faster is recommented, otherwise it's slow or can crash due to ubsan.") orelse .ReleaseFast;
-
-    const basisu_dep = b.dependency("mach-basisu", .{
-        .target = target,
-        .optimize = basisu_optimize,
-    });
-
     const zalgebra_dep = b.dependency("zalgebra", .{});
 
     const assets_mod = b.addModule("assets", .{ .root_source_file = .{ .path = "src/assets/root.zig" } });
@@ -71,8 +64,6 @@ pub fn build(b: *Build) void {
         l.root_module.addImport("zalgebra", zalgebra_dep.module("zalgebra"));
         l.root_module.addImport("assets", assets_mod);
         l.root_module.addImport("asset_manifest", asset_manifest_mod);
-        l.linkLibrary(basisu_dep.artifact("mach-basisu"));
-        l.root_module.addImport("mach-basisu", basisu_dep.module("mach-basisu"));
     }
 
     const install_lib = b.addInstallArtifact(lib, .{ .dest_dir = .{ .override = .prefix } });
@@ -291,7 +282,7 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
             const out_name = try std.mem.concat(
                 b.allocator,
                 u8,
-                &.{ std.fs.path.stem(entry.basename), ".tex" }, // basisu
+                &.{ std.fs.path.stem(entry.basename), ".tex" },
             );
             const compiled_file = run_assetc.addOutputFileArg(out_name);
 

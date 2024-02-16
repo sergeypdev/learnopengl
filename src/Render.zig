@@ -202,7 +202,7 @@ pub fn finish(self: *Render) void {
     c.SDL_Delay(1);
 }
 
-fn checkGLError() void {
+pub fn checkGLError() void {
     var err = gl.getError();
     if (err == gl.NO_ERROR) return;
 

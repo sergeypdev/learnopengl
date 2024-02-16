@@ -175,6 +175,7 @@ pub const Texture = struct {
         mip_levels: u32,
         width: u32,
         height: u32,
+        size: u32,
     };
 
     header: Header,
@@ -189,7 +190,7 @@ pub const Texture = struct {
 
         return Texture{
             .header = header.*,
-            .data = buf[@sizeOf(Header)..],
+            .data = buf[@sizeOf(Header) .. @sizeOf(Header) + header.size],
         };
     }
 };
@@ -208,6 +209,7 @@ test "texture write/parse" {
             .width = 123,
             .height = 234,
             .mip_levels = 1,
+            .size = data.len,
         },
         .data = &data,
     };

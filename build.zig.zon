@@ -27,10 +27,6 @@
             .url = "git+https://github.com/sergeypdev/zalgebra.git#232ff76712dc7cc270b6c48cedc84617536f3a59",
             .hash = "12206e29e5d0f012c694f413b21cb66238964fdaef0a29781e0bf3ff75ec08a2ed78",
         },
-        .@"mach-basisu" = .{
-            .url = "https://github.com/hexops/mach-basisu/tarball/5a68105a5e503c7183aab481b7ec6ae16b996943",
-            .hash = "12204098c8d8d15a687068a3c0b15fe95d20f8fe074531e34e78f9dfe518cf86a67c",
-        },
     },
     .paths = .{
         // This makes *all* files, recursively, included in this package. It is generally

@@ -20,7 +20,8 @@ const fs_utils = @import("fs/utils.zig");
 const formats = @import("formats.zig");
 const asset_manifest = @import("asset_manifest");
 const assets = @import("assets");
-const basisu = @import("mach-basisu");
+const checkGLError = @import("Render.zig").checkGLError;
+// const basisu = @import("mach-basisu");
 const Vec3 = @import("zalgebra").Vec3;
 
 pub const AssetId = assets.AssetId;
@@ -49,7 +50,7 @@ dependees: std.AutoHashMapUnmanaged(AssetId, std.SegmentedList(AssetId, 4)) = .{
 loaded_assets: std.AutoHashMapUnmanaged(AssetId, LoadedAsset) = .{},
 
 pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator) AssetManager {
-    basisu.init_transcoder();
+    // basisu.init_transcoder();
 
     var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const exe_dir_path = std.fs.selfExeDirPath(&buf) catch @panic("can't find self exe dir path");
@@ -349,13 +350,7 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
     const path = asset_manifest.getPath(id);
     const data = try self.loadFile(self.frame_arena, path, TEXTURE_MAX_BYTES);
 
-    const transcoder = try basisu.Transcoder.init(data.bytes);
-    defer transcoder.deinit();
-
-    std.debug.assert(transcoder.getImageCount() == 1); // Not supporting multiple textures yet
-
-    const mip_level_count = transcoder.getImageLevelCount(0);
-    const mip_0_desc = transcoder.getImageLevelDescriptor(0, 0) catch unreachable;
+    const texture = try formats.Texture.fromBuffer(data.bytes);
 
     var name: gl.GLuint = 0;
     gl.createTextures(gl.TEXTURE_2D, 1, &name);
@@ -364,37 +359,28 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
     }
     errdefer gl.deleteTextures(1, &name);
 
-    // TODO: query supported formats first in the future
-    const format = basisu.Transcoder.TextureFormat.bc7_rgba;
-
     gl.textureStorage2D(
         name,
-        @intCast(mip_level_count),
+        @intCast(texture.header.mip_levels),
         gl.COMPRESSED_SRGB_ALPHA_BPTC_UNORM,
-        @intCast(mip_0_desc.original_width),
-        @intCast(mip_0_desc.original_height),
+        @intCast(texture.header.width),
+        @intCast(texture.header.height),
     );
+    checkGLError();
 
-    for (0..mip_level_count) |mip_level| {
-        const desc = transcoder.getImageLevelDescriptor(0, @intCast(mip_level)) catch unreachable;
-        const out_buf = try self.frame_arena.alloc(
-            u8,
-            @intCast(try transcoder.calcTranscodedSize(0, @intCast(mip_level), format)),
-        );
-
-        try transcoder.transcode(out_buf, 0, @intCast(mip_level), format, .{});
-
+    for (0..texture.header.mip_levels) |mip_level| {
         gl.compressedTextureSubImage2D(
             name,
             @intCast(mip_level),
             0,
             0,
-            @intCast(desc.original_width),
-            @intCast(desc.original_height),
+            @intCast(texture.header.width),
+            @intCast(texture.header.height),
             gl.COMPRESSED_SRGB_ALPHA_BPTC_UNORM,
-            @intCast(out_buf.len),
-            @ptrCast(out_buf.ptr),
+            @intCast(texture.data.len),
+            @ptrCast(texture.data.ptr),
         );
+        checkGLError();
     }
 
     const handle = gl.GL_ARB_bindless_texture.getTextureHandleARB(name);
