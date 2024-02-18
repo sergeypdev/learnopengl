@@ -201,7 +201,6 @@ const MipLevel = struct {
 
 fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []const u8, hdr: bool) !void {
     _ = hdr; // autofix
-    const input_srgb = true;
     var width_int: c_int = undefined;
     var height_int: c_int = undefined;
     var comps: c_int = undefined;
@@ -226,10 +225,6 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
     }
 
     var settings: c.bc7_enc_settings = undefined;
-
-    if (input_srgb) {
-        convertSrgb(data);
-    }
 
     if (comps == 3) {
         c.GetProfile_ultrafast(&settings);
