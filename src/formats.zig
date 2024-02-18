@@ -163,8 +163,7 @@ pub const Texture = struct {
     pub const Format = enum(u32) {
         bc5, // uncorrelated 2 channel, used for normal maps
         bc6, // f16 for hdr textures
-        bc7, // normal rgba textures, assumed linear colors
-        bc7_srgb, // normal rgba textures, assumed srgb
+        bc7, // normal rgba textures, linear colors
     };
 
     pub const MAGIC = [_]u8{ 'T', 'X', 'F', 'M' };
@@ -172,33 +171,67 @@ pub const Texture = struct {
     pub const Header = extern struct {
         magic: [4]u8 = MAGIC,
         format: Format,
-        mip_levels: u32,
         width: u32,
         height: u32,
-        size: u32,
+        mip_count: u32,
     };
 
     header: Header,
-    data: []u8,
+    data: []const []const u8,
 
-    pub fn fromBuffer(buf: []u8) !Texture {
+    pub inline fn mipLevels(self: *const Texture) usize {
+        return self.data.len;
+    }
+
+    pub fn getMipDesc(self: *const Texture, mip_level: usize) MipDesc {
+        const divisor = std.math.powi(u32, 2, @intCast(mip_level)) catch unreachable;
+        return MipDesc{
+            .width = self.header.width / divisor,
+            .height = self.header.height / divisor,
+        };
+    }
+
+    pub const MipDesc = struct {
+        width: u32,
+        height: u32,
+    };
+
+    // TODO: avoid allocation here
+    pub fn fromBuffer(allocator: std.mem.Allocator, buf: []u8) !Texture {
         const header: *align(1) Header = @ptrCast(buf.ptr);
 
         if (!std.mem.eql(u8, &header.magic, &MAGIC)) {
             return error.MagicMatch;
         }
 
+        const data = try allocator.alloc([]u8, @intCast(header.mip_count));
+
+        var mip_level: usize = 0;
+        var mip_data = buf[@sizeOf(Header)..];
+
+        while (mip_data.len > 4) {
+            const mip_len = std.mem.readInt(u32, mip_data[0..4], native_endian);
+            const mip_slice = mip_data[4..@intCast(4 + mip_len)];
+            data[mip_level] = mip_slice;
+            mip_data = mip_data[4 + mip_slice.len ..];
+            mip_level += 1;
+        }
+
         return Texture{
             .header = header.*,
-            .data = buf[@sizeOf(Header) .. @sizeOf(Header) + header.size],
+            .data = data,
         };
     }
 };
 
 // TODO: this doesn't respect endiannes at all
-pub fn writeTexture(writer: anytype, value: Texture) !void {
+pub fn writeTexture(writer: anytype, value: Texture, endian: std.builtin.Endian) !void {
     try writer.writeStruct(value.header);
-    try writer.writeAll(value.data);
+
+    for (value.data) |mip_img| {
+        try writer.writeInt(u32, @intCast(mip_img.len), endian);
+        try writer.writeAll(mip_img);
+    }
 }
 
 test "texture write/parse" {

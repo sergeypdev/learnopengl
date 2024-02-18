@@ -350,7 +350,7 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
     const path = asset_manifest.getPath(id);
     const data = try self.loadFile(self.frame_arena, path, TEXTURE_MAX_BYTES);
 
-    const texture = try formats.Texture.fromBuffer(data.bytes);
+    const texture = try formats.Texture.fromBuffer(self.frame_arena, data.bytes);
 
     var name: gl.GLuint = 0;
     gl.createTextures(gl.TEXTURE_2D, 1, &name);
@@ -361,24 +361,25 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
 
     gl.textureStorage2D(
         name,
-        @intCast(texture.header.mip_levels),
-        gl.COMPRESSED_SRGB_ALPHA_BPTC_UNORM,
+        @intCast(texture.mipLevels()),
+        gl.COMPRESSED_RGBA_BPTC_UNORM,
         @intCast(texture.header.width),
         @intCast(texture.header.height),
     );
     checkGLError();
 
-    for (0..texture.header.mip_levels) |mip_level| {
+    for (0..texture.mipLevels()) |mip_level| {
+        const desc = texture.getMipDesc(mip_level);
         gl.compressedTextureSubImage2D(
             name,
             @intCast(mip_level),
             0,
             0,
-            @intCast(texture.header.width),
-            @intCast(texture.header.height),
-            gl.COMPRESSED_SRGB_ALPHA_BPTC_UNORM,
-            @intCast(texture.data.len),
-            @ptrCast(texture.data.ptr),
+            @intCast(desc.width),
+            @intCast(desc.height),
+            gl.COMPRESSED_RGBA_BPTC_UNORM,
+            @intCast(texture.data[mip_level].len),
+            @ptrCast(texture.data[mip_level].ptr),
         );
         checkGLError();
     }
