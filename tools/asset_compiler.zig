@@ -230,6 +230,10 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
 
     const rgba_data = rgba_data_c[0 .. width * height * 4];
 
+    if (comps == 4) {
+        premultiplyAlpha(rgba_data);
+    }
+
     const data_channels: usize = if (format == .bc5) 2 else 4;
     const data = if (data_channels < 4) dropChannels(rgba_data, data_channels) else rgba_data;
 
@@ -239,11 +243,7 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
         return error.ImageSizeShouldBeDivisibleBy4;
     }
 
-    if (comps == 4) {
-        premultiplyAlpha(data);
-    }
-
-    const mip_levels_to_gen = if (data_channels == 2) 1 else 1 + @as(
+    const mip_levels_to_gen = 1 + @as(
         u32,
         @intFromFloat(@log2(@as(f32, @floatFromInt(@max(width, height))))),
     );
@@ -430,7 +430,7 @@ fn downsampleRGImage2X(src: *const MipLevel, dst: *const MipLevel) void {
                 }
             }
 
-            result /= @splat(2);
+            result /= @splat(4);
             storeColorVec2(dst.data[y * dstStride + x * 2 ..], result);
         }
     }

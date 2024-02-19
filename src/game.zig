@@ -182,7 +182,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
                     .handle = a.Meshes.bunny,
                     .material = .{
                         .albedo_map = a.Textures.bunny_tex1,
-                        // .normal_map = a.Textures.@"tile.norm",
+                        .normal_map = a.Textures.@"tile.norm",
                     },
                 },
             });
