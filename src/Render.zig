@@ -51,13 +51,16 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
     gl.vertexArrayAttribFormat(vao, Attrib.Position.value(), 3, gl.FLOAT, gl.FALSE, 0);
 
     // normals
-    // gl.vertexArrayVertexBuffer(vao, 1, normals, 0, @sizeOf(formats.Vector3));
     gl.enableVertexArrayAttrib(vao, Attrib.Normal.value());
     gl.vertexArrayAttribBinding(vao, Attrib.Normal.value(), 1);
     gl.vertexArrayAttribFormat(vao, Attrib.Normal.value(), 3, gl.FLOAT, gl.FALSE, 0);
 
+    // tangents
+    gl.enableVertexArrayAttrib(vao, Attrib.Tangent.value());
+    gl.vertexArrayAttribBinding(vao, Attrib.Tangent.value(), 3);
+    gl.vertexArrayAttribFormat(vao, Attrib.Tangent.value(), 3, gl.FLOAT, gl.FALSE, 0);
+
     // uvs
-    // gl.vertexArrayVertexBuffer(vao, 1, normals, 0, @sizeOf(formats.Vector3));
     gl.enableVertexArrayAttrib(vao, Attrib.UV.value());
     gl.vertexArrayAttribBinding(vao, Attrib.UV.value(), 2);
     gl.vertexArrayAttribFormat(vao, Attrib.UV.value(), 2, gl.FLOAT, gl.FALSE, 0);
@@ -185,6 +188,7 @@ pub fn draw(self: *Render, cmd: DrawCommand) void {
     const mesh = self.assetman.resolveMesh(cmd.mesh);
     mesh.positions.bind(Render.Attrib.Position.value());
     mesh.normals.bind(Render.Attrib.Normal.value());
+    mesh.tangents.bind(Render.Attrib.Tangent.value());
     mesh.uvs.bind(Render.Attrib.UV.value());
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
     gl.drawElements(
@@ -237,6 +241,7 @@ pub const Attrib = enum(gl.GLuint) {
     Position = 0,
     Normal = 1,
     UV = 2,
+    Tangent = 3,
 
     pub inline fn value(self: Attrib) gl.GLuint {
         return @intFromEnum(self);

@@ -83,11 +83,13 @@ fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []con
     const mesh: *c.aiMesh = @ptrCast(scene.mMeshes[0]);
 
     if (mesh.mNormals == null) return error.MissingNormals;
+    if (mesh.mTangents == null) return error.MissingTangents;
     if (mesh.mTextureCoords[0] == null) return error.MissingUVs;
     if (mesh.mNumUVComponents[0] != 2) return error.WrongUVComponents;
 
     var vertices = try allocator.alloc(Vector3, @intCast(mesh.mNumVertices));
     var normals = try allocator.alloc(Vector3, @intCast(mesh.mNumVertices));
+    var tangents = try allocator.alloc(Vector3, @intCast(mesh.mNumVertices));
     var uvs = try allocator.alloc(Vector2, @intCast(mesh.mNumVertices));
 
     var indices = try allocator.alloc(formats.Index, @intCast(mesh.mNumFaces * 3)); // triangles
@@ -102,6 +104,11 @@ fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []con
             .x = mesh.mNormals[i].x,
             .y = mesh.mNormals[i].y,
             .z = mesh.mNormals[i].z,
+        };
+        tangents[i] = .{
+            .x = mesh.mTangents[i].x,
+            .y = mesh.mTangents[i].y,
+            .z = mesh.mTangents[i].z,
         };
         uvs[i] = .{
             .x = mesh.mTextureCoords[0][i].x,
@@ -136,6 +143,7 @@ fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []con
         },
         .vertices = vertices,
         .normals = normals,
+        .tangents = tangents,
         .uvs = uvs,
         .indices = indices,
     };

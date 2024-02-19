@@ -30,6 +30,7 @@ VERTEX_EXPORT VertexData {
   vec3 position;
   vec3 normal;
   vec2 uv;
+  vec3 tangent;
 } VertexOut;
 
 #if VERTEX_SHADER
@@ -37,6 +38,7 @@ VERTEX_EXPORT VertexData {
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNorm;
 layout(location = 2) in vec2 aUV;
+layout(location = 3) in vec3 aTangent;
 
 void main() {
     gl_Position = projection * view * model * vec4(aPos.xyz, 1.0);
@@ -44,6 +46,7 @@ void main() {
     VertexOut.position = posWorld.xyz / posWorld.w;
     VertexOut.normal = aNorm;
     VertexOut.uv = aUV;
+    VertexOut.tangent = aTangent;
 }
 #endif // VERTEX_SHADER
 

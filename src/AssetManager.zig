@@ -235,6 +235,11 @@ const NullMesh = LoadedMesh{
         .offset = 0,
         .stride = 0,
     },
+    .tangents = BufferSlice{
+        .buffer = 0,
+        .offset = 0,
+        .stride = 0,
+    },
     .uvs = BufferSlice{
         .buffer = 0,
         .offset = 0,
@@ -265,7 +270,7 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
     const data = try self.loadFile(self.frame_arena, path, MESH_MAX_BYTES);
     const mesh = formats.Mesh.fromBuffer(data.bytes);
 
-    var bufs = [_]gl.GLuint{ 0, 0, 0, 0 };
+    var bufs = [_]gl.GLuint{ 0, 0, 0, 0, 0 };
     gl.createBuffers(bufs.len, &bufs);
     errdefer gl.deleteBuffers(bufs.len, &bufs);
 
@@ -273,37 +278,43 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
     std.debug.assert(vertices != 0);
     const normals = bufs[1];
     std.debug.assert(normals != 0);
-    const uvs = bufs[2];
+    const tangents = bufs[2];
+    std.debug.assert(tangents != 0);
+    const uvs = bufs[3];
     std.debug.assert(uvs != 0);
-    const indices = bufs[3];
+    const indices = bufs[4];
     std.debug.assert(indices != 0);
 
     gl.namedBufferStorage(
         vertices,
         @intCast(mesh.vertices.len * @sizeOf(formats.Vector3)),
-        @ptrCast(mesh.vertices),
+        @ptrCast(mesh.vertices.ptr),
         0,
     );
     gl.namedBufferStorage(
         normals,
         @intCast(mesh.normals.len * @sizeOf(formats.Vector3)),
-        @ptrCast(mesh.normals),
+        @ptrCast(mesh.normals.ptr),
+        0,
+    );
+    gl.namedBufferStorage(
+        tangents,
+        @intCast(mesh.tangents.len * @sizeOf(formats.Vector3)),
+        @ptrCast(mesh.tangents.ptr),
         0,
     );
     gl.namedBufferStorage(
         uvs,
         @intCast(mesh.uvs.len * @sizeOf(formats.Vector2)),
-        @ptrCast(mesh.uvs),
+        @ptrCast(mesh.uvs.ptr),
         0,
     );
     gl.namedBufferStorage(
         indices,
         @intCast(mesh.indices.len * @sizeOf(formats.Index)),
-        @ptrCast(mesh.indices),
+        @ptrCast(mesh.indices.ptr),
         0,
     );
-
-    // gl.bindVertexBuffer(_bindingindex: GLuint, _buffer: GLuint, _offset: GLintptr, _stride: GLsizei)
 
     const loaded_mesh = LoadedMesh{
         .aabb = .{
@@ -317,6 +328,11 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
         },
         .normals = .{
             .buffer = normals,
+            .offset = 0,
+            .stride = @sizeOf(formats.Vector3),
+        },
+        .tangents = .{
+            .buffer = tangents,
             .offset = 0,
             .stride = @sizeOf(formats.Vector3),
         },
@@ -422,6 +438,7 @@ const LoadedMesh = struct {
     aabb: AABB,
     positions: BufferSlice,
     normals: BufferSlice,
+    tangents: BufferSlice,
     uvs: BufferSlice,
     indices: IndexSlice,
 };
@@ -572,7 +589,7 @@ fn unloadAssetWithDependees(self: *AssetManager, id: AssetId) void {
 
         switch (asset.*) {
             .mesh => |*mesh| {
-                gl.deleteBuffers(4, &[_]gl.GLuint{ mesh.positions.buffer, mesh.normals.buffer, mesh.uvs.buffer, mesh.indices.buffer });
+                gl.deleteBuffers(5, &[_]gl.GLuint{ mesh.positions.buffer, mesh.normals.buffer, mesh.tangents.buffer, mesh.uvs.buffer, mesh.indices.buffer });
             },
             .shader => |*shader| {
                 self.allocator.free(shader.source);

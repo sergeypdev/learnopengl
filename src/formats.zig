@@ -24,6 +24,7 @@ pub const Mesh = struct {
 
     vertices: []align(1) Vector3,
     normals: []align(1) Vector3,
+    tangents: []align(1) Vector3,
     uvs: []align(1) Vector2,
     indices: []align(1) Index,
 
@@ -54,6 +55,8 @@ pub const Mesh = struct {
         offset += size;
         const normals = std.mem.bytesAsSlice(Vector3, buffer[offset .. offset + size]);
         offset += size;
+        const tangents = std.mem.bytesAsSlice(Vector3, buffer[offset .. offset + size]);
+        offset += size;
 
         size = vert_len * @sizeOf(Vector2);
         const uvs = std.mem.bytesAsSlice(Vector2, buffer[offset .. offset + size]);
@@ -67,6 +70,7 @@ pub const Mesh = struct {
             .aabb = aabb,
             .vertices = vertices,
             .normals = normals,
+            .tangents = tangents,
             .uvs = uvs,
             .indices = indices,
         };
@@ -91,6 +95,9 @@ pub fn writeMesh(writer: anytype, value: Mesh, endian: std.builtin.Endian) !void
     }
     for (value.normals) |n| {
         try writeVector3(writer, n, endian);
+    }
+    for (value.tangents) |t| {
+        try writeVector3(writer, t, endian);
     }
     for (value.uvs) |uv| {
         try writeVector2(writer, uv, endian);
