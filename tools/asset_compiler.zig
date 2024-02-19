@@ -209,22 +209,29 @@ const MipLevel = struct {
 
 fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []const u8, hdr: bool) !void {
     _ = hdr; // autofix
+
+    // For tex.norm.png - this will be ".norm"
+    const sub_ext = std.fs.path.extension(std.fs.path.stem(std.mem.span(input)));
+    const format = if (std.mem.eql(u8, sub_ext, ".norm")) formats.Texture.Format.bc5 else formats.Texture.Format.bc7;
+
     var width_int: c_int = undefined;
     var height_int: c_int = undefined;
     var comps: c_int = undefined;
 
     c.stbi_set_flip_vertically_on_load(1);
-    const FORCED_COMPONENTS = 4; // force rgb
-    const data_c = c.stbi_load(input, &width_int, &height_int, &comps, FORCED_COMPONENTS);
-    if (data_c == null) {
+    const rgba_data_c = c.stbi_load(input, &width_int, &height_int, &comps, 4);
+    if (rgba_data_c == null) {
         return error.ImageLoadError;
     }
-    defer c.stbi_image_free(data_c);
+    defer c.stbi_image_free(rgba_data_c);
 
     const width: usize = @intCast(width_int);
     const height: usize = @intCast(height_int);
 
-    const data = data_c[0 .. width * height * FORCED_COMPONENTS];
+    const rgba_data = rgba_data_c[0 .. width * height * 4];
+
+    const data_channels: usize = if (format == .bc5) 2 else 4;
+    const data = if (data_channels < 4) dropChannels(rgba_data, data_channels) else rgba_data;
 
     // TODO: support textures not divisible by 4
     if (width % 4 != 0 or height % 4 != 0) {
@@ -232,19 +239,11 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
         return error.ImageSizeShouldBeDivisibleBy4;
     }
 
-    var settings: c.bc7_enc_settings = undefined;
-
-    if (comps == 3) {
-        c.GetProfile_ultrafast(&settings);
-    } else if (comps == 4) {
+    if (comps == 4) {
         premultiplyAlpha(data);
-        c.GetProfile_alpha_ultrafast(&settings);
-    } else {
-        std.log.debug("Channel count: {}\n", .{comps});
-        return error.UnsupportedChannelCount;
     }
 
-    const mip_levels_to_gen = 1 + @as(
+    const mip_levels_to_gen = if (data_channels == 2) 1 else 1 + @as(
         u32,
         @intFromFloat(@log2(@as(f32, @floatFromInt(@max(width, height))))),
     );
@@ -270,7 +269,7 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
             MipLevel{
                 .width = mip_width,
                 .height = mip_height,
-                .data = try allocator.alloc(u8, mip_width * mip_height * FORCED_COMPONENTS),
+                .data = try allocator.alloc(u8, mip_width * mip_height * data_channels),
             },
         );
         actual_mip_count += 1;
@@ -280,24 +279,14 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
     for (0..actual_mip_count) |mip_level| {
         const mip_data = &mip_pyramid.items[mip_level];
         if (mip_level > 0) {
-            downsampleImage2X(&mip_pyramid.items[mip_level - 1], mip_data);
+            switch (data_channels) {
+                2 => downsampleRGImage2X(&mip_pyramid.items[mip_level - 1], mip_data),
+                4 => downsampleRGBAImage2X(&mip_pyramid.items[mip_level - 1], mip_data),
+                else => unreachable,
+            }
         }
 
-        const blocks_x: usize = mip_data.width / 4;
-        const blocks_y: usize = mip_data.height / 4;
-
-        const out_data = try allocator.alloc(u8, blocks_x * blocks_y * 16);
-
-        const rgba_surf = c.rgba_surface{
-            .width = @intCast(mip_data.width),
-            .height = @intCast(mip_data.height),
-            .stride = @intCast(mip_data.width * FORCED_COMPONENTS),
-            .ptr = mip_data.data.ptr,
-        };
-
-        c.CompressBlocksBC7(&rgba_surf, out_data.ptr, &settings);
-
-        mip_data.out_data = out_data;
+        mip_data.out_data = try compressBlocksAlloc(allocator, mip_data.data, data_channels, format, @intCast(comps), mip_data.width, mip_data.height);
     }
 
     const out_data = try allocator.alloc([]const u8, actual_mip_count);
@@ -307,7 +296,7 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
 
     const texture = formats.Texture{
         .header = .{
-            .format = .bc7,
+            .format = format,
             .width = @intCast(width),
             .height = @intCast(height),
             .mip_count = @intCast(actual_mip_count),
@@ -320,6 +309,64 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
 
     try formats.writeTexture(buf_writer.writer(), texture, formats.native_endian);
     try buf_writer.flush();
+}
+
+fn compressBlocksAlloc(
+    allocator: std.mem.Allocator,
+    pixels: []u8,
+    components: usize, // 2 for normal maps, 4 for everything else
+    format: formats.Texture.Format,
+    original_components: usize, // how many components in original image. Does not match actual components
+    width: usize,
+    height: usize,
+) ![]u8 {
+    std.debug.assert(width % 4 == 0);
+    std.debug.assert(height % 4 == 0);
+
+    const blocks_x = width / 4;
+    const blocks_y = height / 4;
+
+    const rgba_surf = c.rgba_surface{
+        .width = @intCast(width),
+        .height = @intCast(height),
+        .stride = @intCast(width * components),
+        .ptr = pixels.ptr,
+    };
+
+    const output = try allocator.alloc(u8, blocks_x * blocks_y * 16);
+    switch (format) {
+        .bc7 => {
+            var settings: c.bc7_enc_settings = .{};
+            if (original_components == 3) {
+                c.GetProfile_ultrafast(&settings);
+            } else if (original_components == 4) {
+                c.GetProfile_alpha_ultrafast(&settings);
+            } else {
+                std.log.debug("Channel count: {}\n", .{original_components});
+                return error.UnsupportedChannelCount;
+            }
+            c.CompressBlocksBC7(&rgba_surf, output.ptr, &settings);
+        },
+        .bc5 => {
+            std.debug.assert(components == 2);
+            c.CompressBlocksBC5(&rgba_surf, output.ptr);
+        },
+        .bc6 => {
+            return error.NotImplementedYet;
+        },
+    }
+
+    return output;
+}
+
+fn dropChannels(rgba_data: []u8, channel_count: usize) []u8 {
+    for (0..rgba_data.len / 4) |i| {
+        for (0..channel_count) |j| {
+            rgba_data[i * 2 + j] = rgba_data[i * 4 + j];
+        }
+    }
+
+    return rgba_data[0 .. (rgba_data.len / 4) * channel_count];
 }
 
 const gamma = 2.2;
@@ -365,7 +412,31 @@ inline fn vecPow(x: @Vector(4, f32), y: f32) @Vector(4, f32) {
     return @exp(@log(x) * @as(@Vector(4, f32), @splat(y)));
 }
 
-fn downsampleImage2X(src: *const MipLevel, dst: *const MipLevel) void {
+fn downsampleRGImage2X(src: *const MipLevel, dst: *const MipLevel) void {
+    const srcStride = src.width * 2;
+    const dstStride = dst.width * 2;
+    for (0..dst.height) |y| {
+        for (0..dst.width) |x| {
+            const x0 = x * 2;
+            const y0 = y * 2;
+            var result = @Vector(2, f32){ 0, 0 };
+
+            for (0..2) |y1| {
+                for (0..2) |x1| {
+                    const srcX = x0 + x1;
+                    const srcY = y0 + y1;
+
+                    result += loadColorVec2(src.data[srcY * srcStride + srcX * 2 ..]);
+                }
+            }
+
+            result /= @splat(2);
+            storeColorVec2(dst.data[y * dstStride + x * 2 ..], result);
+        }
+    }
+}
+
+fn downsampleRGBAImage2X(src: *const MipLevel, dst: *const MipLevel) void {
     const srcStride = src.width * 4;
     const dstStride = dst.width * 4;
     for (0..dst.height) |y| {
@@ -379,17 +450,37 @@ fn downsampleImage2X(src: *const MipLevel, dst: *const MipLevel) void {
                     const srcX = x0 + x1;
                     const srcY = y0 + y1;
 
-                    result += loadColorVec(src.data[srcY * srcStride + srcX * 4 ..]);
+                    result += loadColorVec4(src.data[srcY * srcStride + srcX * 4 ..]);
                 }
             }
 
             result /= @splat(4);
-            storeColorVec(dst.data[y * dstStride + x * 4 ..], result);
+            storeColorVec4(dst.data[y * dstStride + x * 4 ..], result);
         }
     }
 }
 
-inline fn loadColorVec(pixel: []const u8) @Vector(4, f32) {
+inline fn loadColorVec2(pixel: []const u8) @Vector(2, f32) {
+    @setRuntimeSafety(false);
+    std.debug.assert(pixel.len >= 2);
+
+    return @Vector(2, f32){
+        @as(f32, @floatFromInt(pixel[0])),
+        @as(f32, @floatFromInt(pixel[1])),
+    } / @as(@Vector(2, f32), @splat(255.0));
+}
+
+inline fn storeColorVec2(pixel: []u8, vec: @Vector(2, f32)) void {
+    @setRuntimeSafety(false);
+    std.debug.assert(pixel.len >= 2);
+
+    const out = vec * @as(@Vector(2, f32), @splat(255.0));
+
+    pixel[0] = @intFromFloat(out[0]);
+    pixel[1] = @intFromFloat(out[1]);
+}
+
+inline fn loadColorVec4(pixel: []const u8) @Vector(4, f32) {
     @setRuntimeSafety(false);
     std.debug.assert(pixel.len >= 4);
 
@@ -401,7 +492,7 @@ inline fn loadColorVec(pixel: []const u8) @Vector(4, f32) {
     } / @as(@Vector(4, f32), @splat(255.0));
 }
 
-inline fn storeColorVec(pixel: []u8, vec: @Vector(4, f32)) void {
+inline fn storeColorVec4(pixel: []u8, vec: @Vector(4, f32)) void {
     @setRuntimeSafety(false);
     std.debug.assert(pixel.len >= 4);
 

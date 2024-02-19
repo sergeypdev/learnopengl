@@ -178,11 +178,15 @@ pub fn getPointLights(self: *Render) *PointLightArray {
 }
 
 pub fn draw(self: *Render, cmd: DrawCommand) void {
-    gl.uniformMatrix4fv(1, 1, gl.FALSE, @ptrCast(&cmd.transform.data));
-    gl.uniform3fv(2, 1, @ptrCast(&cmd.material.albedo.data));
+    gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&cmd.transform.data));
+    gl.uniform3fv(Uniform.Color.value(), 1, @ptrCast(&cmd.material.albedo.data));
     gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-        3,
+        Uniform.AlbedoMap.value(),
         self.assetman.resolveTexture(cmd.material.albedo_map).handle,
+    );
+    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+        Uniform.NormalMap.value(),
+        self.assetman.resolveTexture(cmd.material.normal_map).handle,
     );
 
     const mesh = self.assetman.resolveMesh(cmd.mesh);
@@ -256,6 +260,17 @@ pub const UBO = enum(gl.GLuint) {
     }
 };
 
+pub const Uniform = enum(gl.GLint) {
+    ModelMatrix = 1,
+    Color = 2,
+    AlbedoMap = 3,
+    NormalMap = 4,
+
+    pub inline fn value(self: Uniform) gl.GLint {
+        return @intFromEnum(self);
+    }
+};
+
 // TODO: support ortho
 pub const Camera = struct {
     fovy: f32 = 60,
@@ -288,4 +303,5 @@ pub const PointLightArray = extern struct {
 pub const Material = struct {
     albedo: Vec3 = Vec3.one(),
     albedo_map: AssetManager.Handle.Texture = .{},
+    normal_map: AssetManager.Handle.Texture = .{},
 };

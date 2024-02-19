@@ -162,8 +162,13 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     // Plane
     _ = globals.g_mem.world.addEntity(.{
         .flags = .{ .mesh = true },
-        .transform = .{ .scale = Vec3.one().scale(100) },
-        .mesh = .{ .handle = a.Meshes.plane },
+        .transform = .{ .scale = Vec3.one().scale(1) },
+        .mesh = .{
+            .handle = a.Meshes.plane,
+            .material = .{
+                .normal_map = a.Textures.@"tile.norm",
+            },
+        },
     });
 
     // 10 bunnies
@@ -173,7 +178,13 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
                 .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3, 0, 0) },
 
                 .flags = .{ .mesh = true },
-                .mesh = .{ .handle = a.Meshes.bunny, .material = .{ .albedo_map = a.Textures.bunny_tex1 } },
+                .mesh = .{
+                    .handle = a.Meshes.bunny,
+                    .material = .{
+                        .albedo_map = a.Textures.bunny_tex1,
+                        // .normal_map = a.Textures.@"tile.norm",
+                    },
+                },
             });
         }
     }

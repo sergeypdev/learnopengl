@@ -375,10 +375,16 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
     }
     errdefer gl.deleteTextures(1, &name);
 
+    const gl_format: gl.GLenum = switch (texture.header.format) {
+        .bc7 => gl.COMPRESSED_RGBA_BPTC_UNORM,
+        .bc5 => gl.COMPRESSED_RG_RGTC2,
+        .bc6 => gl.COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT,
+    };
+
     gl.textureStorage2D(
         name,
         @intCast(texture.mipLevels()),
-        gl.COMPRESSED_RGBA_BPTC_UNORM,
+        gl_format,
         @intCast(texture.header.width),
         @intCast(texture.header.height),
     );
@@ -393,7 +399,7 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
             0,
             @intCast(desc.width),
             @intCast(desc.height),
-            gl.COMPRESSED_RGBA_BPTC_UNORM,
+            gl_format,
             @intCast(texture.data[mip_level].len),
             @ptrCast(texture.data[mip_level].ptr),
         );
