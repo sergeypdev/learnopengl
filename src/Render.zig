@@ -188,6 +188,21 @@ pub fn draw(self: *Render, cmd: DrawCommand) void {
         Uniform.NormalMap.value(),
         self.assetman.resolveTexture(cmd.material.normal_map).handle,
     );
+    gl.uniform1fv(Uniform.Metallic.value(), 1, &cmd.material.metallic);
+    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+        Uniform.MetallicMap.value(),
+        self.assetman.resolveTexture(cmd.material.metallic_map).handle,
+    );
+    gl.uniform1fv(Uniform.Roughness.value(), 1, &cmd.material.roughness);
+    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+        Uniform.RoughnessMap.value(),
+        self.assetman.resolveTexture(cmd.material.roughness_map).handle,
+    );
+    gl.uniform1fv(Uniform.Emission.value(), 1, &cmd.material.emission);
+    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+        Uniform.EmissionMap.value(),
+        self.assetman.resolveTexture(cmd.material.emission_map).handle,
+    );
 
     const mesh = self.assetman.resolveMesh(cmd.mesh);
     mesh.positions.bind(Render.Attrib.Position.value());
@@ -265,6 +280,12 @@ pub const Uniform = enum(gl.GLint) {
     Color = 2,
     AlbedoMap = 3,
     NormalMap = 4,
+    Metallic = 5,
+    MetallicMap = 6,
+    Roughness = 7,
+    RoughnessMap = 8,
+    Emission = 9,
+    EmissionMap = 10,
 
     pub inline fn value(self: Uniform) gl.GLint {
         return @intFromEnum(self);
@@ -291,7 +312,7 @@ const CameraMatrices = extern struct {
     view: Mat4,
 };
 pub const PointLight = extern struct {
-    pos_radius: Vec4, // x, y, z - pos, w - radius
+    pos_radius: Vec4, // x, y, z - vPos, w - radius
     color_intensity: Vec4, // x, y, z - color, w - intensity
 };
 
@@ -304,4 +325,10 @@ pub const Material = struct {
     albedo: Vec3 = Vec3.one(),
     albedo_map: AssetManager.Handle.Texture = .{},
     normal_map: AssetManager.Handle.Texture = .{},
+    metallic: f32 = 0,
+    metallic_map: AssetManager.Handle.Texture = .{},
+    roughness: f32 = 1,
+    roughness_map: AssetManager.Handle.Texture = .{},
+    emission: f32 = 0,
+    emission_map: AssetManager.Handle.Texture = .{},
 };

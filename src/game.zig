@@ -346,8 +346,11 @@ export fn game_update() bool {
 
                 if (ent.flags.point_light) {
                     const pos = ent.transform.pos;
+                    var pos4 = Vec4.new(pos.x(), pos.y(), pos.z(), 1.0);
+                    pos4 = gmem.render.camera.view_mat.mulByVec4(pos4);
+
                     point_lights.lights[point_lights.count] = .{
-                        .pos_radius = Vec4.new(pos.x(), pos.y(), pos.z(), ent.point_light.radius),
+                        .pos_radius = Vec4.new(pos4.x(), pos4.y(), pos4.z(), ent.point_light.radius),
                         .color_intensity = ent.point_light.color_intensity,
                     };
                     point_lights.count += 1;
