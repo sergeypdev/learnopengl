@@ -143,14 +143,14 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     gl.viewport(0, 0, globals.g_init.width, globals.g_init.height);
 
     _ = globals.g_mem.world.addEntity(.{
-        .transform = .{ .pos = Vec3.new(1, 1, 0) },
+        .transform = .{ .pos = Vec3.new(1.8, 1, 0) },
         .flags = .{ .point_light = true, .rotate = true },
         .point_light = .{ .color_intensity = Vec4.new(1.0, 0.3, 0.1, 100.0), .radius = 0.1 },
         .rotate = .{ .axis = Vec3.up(), .rate = 60 },
     });
 
     _ = globals.g_mem.world.addEntity(.{
-        .transform = .{ .pos = Vec3.new(-1, 1, 0) },
+        .transform = .{ .pos = Vec3.new(-2, 1, 0) },
         .flags = .{ .point_light = true, .rotate = true },
         .point_light = .{
             .color_intensity = Vec4.new(0.2, 0.5, 1.0, 100.0),
@@ -159,10 +159,19 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .rotate = .{ .axis = Vec3.up(), .rate = -20 },
     });
 
+    _ = globals.g_mem.world.addEntity(.{
+        .transform = .{ .pos = Vec3.new(1, 0.5, 4) },
+        .flags = .{ .point_light = true },
+        .point_light = .{
+            .color_intensity = Vec4.new(0.2, 0.5, 1.0, 10.0),
+            .radius = 1,
+        },
+    });
+
     // Plane
     _ = globals.g_mem.world.addEntity(.{
         .flags = .{ .mesh = true },
-        .transform = .{ .scale = Vec3.one().scale(1) },
+        .transform = .{ .scale = Vec3.one().scale(2) },
         .mesh = .{
             .handle = a.Meshes.plane,
             .material = .{
@@ -171,18 +180,39 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         },
     });
 
-    // 10 bunnies
+    // 10 dielectric bunnies
     {
         for (0..10) |i| {
             _ = globals.g_mem.world.addEntity(.{
-                .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3, 0, 0) },
+                .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3 - 0.3 * 4.5, 0, 0) },
 
                 .flags = .{ .mesh = true },
                 .mesh = .{
                     .handle = a.Meshes.bunny,
                     .material = .{
                         .albedo_map = a.Textures.bunny_tex1,
-                        .normal_map = a.Textures.@"tile.norm",
+                        // .normal_map = a.Textures.@"tile.norm",
+                        .roughness = @as(f32, @floatFromInt(i)) / 10.0,
+                    },
+                },
+            });
+        }
+    }
+    // 10 metallic bunnies
+    {
+        for (0..10) |i| {
+            _ = globals.g_mem.world.addEntity(.{
+                .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3 - 0.3 * 4.5, 0.3, 0) },
+
+                .flags = .{ .mesh = true },
+                .mesh = .{
+                    .handle = a.Meshes.bunny,
+                    .material = .{
+                        .albedo = Vec3.new(1.000, 0.766, 0.336),
+                        // .albedo_map = a.Textures.bunny_tex1,
+                        // .normal_map = a.Textures.@"tile.norm",
+                        .roughness = @as(f32, @floatFromInt(i + 1)) / 10.0,
+                        .metallic = 1.0,
                     },
                 },
             });
