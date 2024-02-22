@@ -1,4 +1,4 @@
-pub const AssetId = u32;
+pub const AssetId = u64;
 
 pub const Handle = struct {
     pub const Shader = extern struct { id: AssetId = 0 };

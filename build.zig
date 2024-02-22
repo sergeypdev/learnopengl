@@ -1,6 +1,7 @@
 const std = @import("std");
 const Build = std.Build;
 const Step = Build.Step;
+const GenerateAssetManifest = @import("tools/GenerateAssetManifest.zig");
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -37,7 +38,6 @@ pub fn build(b: *Build) void {
     assets_step.dependOn(&install_assetc_step.step);
 
     assetc.root_module.addImport("assets", assets_mod);
-    assetc.root_module.addImport("asset_manifest", asset_manifest_mod);
 
     const gen_asset_manifest = buildAssets(b, &install_assetc_step.step, assets_step, assetc, "assets") catch |err| {
         std.log.err("Failed to build assets {}\n", .{err});
@@ -145,37 +145,13 @@ pub fn build(b: *Build) void {
     test_step.dependOn(&run_exe_unit_tests.step);
 }
 
-const NestedAssetDef = union(enum) {
-    path: std.StringArrayHashMapUnmanaged(NestedAssetDef),
-    asset: usize,
-
-    pub fn put(self: *NestedAssetDef, allocator: std.mem.Allocator, path: []const u8, id: usize) !void {
-        var iter = try std.fs.path.componentIterator(path);
-        const filename = iter.last().?.name;
-        _ = iter.first();
-        // Skip first one because it's always "assets"
-        _ = iter.next();
-
-        var current = &self.path;
-
-        while (iter.next()) |comp| {
-            if (comp.name.ptr == filename.ptr) break;
-            const gop = try current.getOrPut(allocator, comp.name);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = NestedAssetDef{ .path = .{} };
-            }
-            current = &gop.value_ptr.path;
-        }
-
-        try current.put(allocator, std.fs.path.stem(filename), NestedAssetDef{ .asset = id });
-    }
-
-    pub fn deinit(self: *NestedAssetDef, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .path => |*path| path.deinit(allocator),
-            else => {},
-        }
-    }
+const asset_extensions = [_][]const u8{
+    ".obj",
+    ".glsl",
+    ".prog",
+    ".png",
+    ".jpg",
+    ".exr",
 };
 
 // Find all assets and cook them using assetc
@@ -185,12 +161,8 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
     var assetsDir = try std.fs.openDirAbsolute(assetsPath, .{ .iterate = true });
     defer assetsDir.close();
 
-    var asset_id: usize = 1; // Start at 1 because asset id 0 = null asset
-    var meshes = NestedAssetDef{ .path = .{} };
-    var shaders = NestedAssetDef{ .path = .{} };
-    var shader_programs = NestedAssetDef{ .path = .{} };
-    var textures = NestedAssetDef{ .path = .{} };
-    var asset_paths = std.ArrayList([]const u8).init(b.allocator);
+    const gen_asset_manifest = GenerateAssetManifest.create(b);
+    const asset_manifest_file = gen_asset_manifest.getAssetManifest();
 
     var walker = try assetsDir.walk(b.allocator);
     defer walker.deinit();
@@ -198,7 +170,9 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
     while (try walker.next()) |entry| {
         if (std.mem.endsWith(u8, entry.basename, ".obj")) {
             const run_assetc = b.addRunArtifact(assetc);
+            gen_asset_manifest.addAssetListFile(run_assetc.captureStdOut());
             run_assetc.step.dependOn(install_assetc_step);
+
             run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
 
             run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
@@ -220,35 +194,14 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
                 out_path,
             );
             step.dependOn(&install_asset.step);
-
-            {
-                const id = asset_id;
-                asset_id += 1;
-                try meshes.put(b.allocator, out_path, id);
-                try asset_paths.append(out_path);
-            }
         }
 
         if (std.mem.endsWith(u8, entry.basename, ".glsl")) {
-            const out_path = b.pathJoin(&.{
-                path,
-                entry.path,
-            });
-            const install_shader = b.addInstallFileWithDir(.{ .path = out_path }, .prefix, out_path);
-            step.dependOn(&install_shader.step);
-
-            {
-                const id = asset_id;
-                asset_id += 1;
-                try shaders.put(b.allocator, out_path, id);
-                try asset_paths.append(out_path);
-            }
-        }
-
-        // Shader program
-        if (std.mem.endsWith(u8, entry.basename, ".prog")) {
             const run_assetc = b.addRunArtifact(assetc);
             run_assetc.step.dependOn(install_assetc_step);
+
+            gen_asset_manifest.addAssetListFile(run_assetc.captureStdOut());
+
             run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
 
             run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
@@ -264,19 +217,37 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
                 out_path,
             );
             step.dependOn(&install_asset.step);
+        }
 
-            {
-                const id = asset_id;
-                asset_id += 1;
-                try shader_programs.put(b.allocator, out_path, id);
-                try asset_paths.append(out_path);
-            }
+        // Shader program
+        if (std.mem.endsWith(u8, entry.basename, ".prog")) {
+            const run_assetc = b.addRunArtifact(assetc);
+            run_assetc.step.dependOn(install_assetc_step);
+
+            gen_asset_manifest.addAssetListFile(run_assetc.captureStdOut());
+
+            run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
+
+            run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
+            const compiled_file = run_assetc.addOutputFileArg(b.dupe(entry.basename));
+
+            const out_path = b.pathJoin(&.{
+                path,
+                entry.path,
+            });
+            const install_asset = b.addInstallFileWithDir(
+                compiled_file,
+                .prefix,
+                out_path,
+            );
+            step.dependOn(&install_asset.step);
         }
 
         if (std.mem.endsWith(u8, entry.basename, ".png") or std.mem.endsWith(u8, entry.basename, ".jpg") or std.mem.endsWith(u8, entry.basename, ".exr")) {
             const run_assetc = b.addRunArtifact(assetc);
             run_assetc.step.dependOn(install_assetc_step);
             run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
+            gen_asset_manifest.addAssetListFile(run_assetc.captureStdOut());
 
             run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
             const out_name = try std.mem.concat(
@@ -297,81 +268,10 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
                 out_path,
             );
             step.dependOn(&install_asset.step);
-
-            {
-                const id = asset_id;
-                asset_id += 1;
-                try textures.put(b.allocator, out_path, id);
-                try asset_paths.append(out_path);
-            }
         }
     }
 
-    const manifest_path = try writeAssetManifest(b, asset_paths.items, &meshes, &shaders, &shader_programs, &textures);
-    return manifest_path;
-}
-
-fn writeNestedAssetDef(writer: anytype, handle: []const u8, name: []const u8, asset_def: *NestedAssetDef, indent: usize) !void {
-    switch (asset_def.*) {
-        .path => |*path| {
-            var iter = path.iterator();
-
-            try writer.writeByteNTimes(' ', indent * 4);
-            try std.fmt.format(writer, "pub const {} = struct {{\n", .{std.zig.fmtId(name)});
-            while (iter.next()) |entry| {
-                try writeNestedAssetDef(writer, handle, entry.key_ptr.*, entry.value_ptr, indent + 1);
-            }
-            try writer.writeByteNTimes(' ', indent * 4);
-            try std.fmt.format(writer, "}};\n", .{});
-        },
-        .asset => |id| {
-            try writer.writeByteNTimes(' ', indent * 4);
-            try std.fmt.format(writer, "pub const {} = Handle.{s}{{ .id = {} }};\n", .{ std.zig.fmtId(name), handle, id });
-        },
-    }
-}
-
-fn writeAssetManifest(
-    b: *Build,
-    asset_paths: [][]const u8,
-    meshes: *NestedAssetDef,
-    shaders: *NestedAssetDef,
-    shader_programs: *NestedAssetDef,
-    textures: *NestedAssetDef,
-) !Build.LazyPath {
-    var mesh_asset_manifest = std.ArrayList(u8).init(b.allocator);
-    const writer = mesh_asset_manifest.writer();
-
-    try writer.writeAll("// Generated file, do not edit manually!\n\n");
-    try writer.writeAll("const std = @import(\"std\");\n");
-    // TODO: import AssetId instead of harcoding u32s
-    try writer.writeAll("const Handle = @import(\"assets\").Handle;\n\n");
-
-    try writeNestedAssetDef(writer, "Mesh", "Meshes", meshes, 0);
-    try writer.writeByte('\n');
-    try writeNestedAssetDef(writer, "Shader", "Shaders", shaders, 0);
-    try writer.writeByte('\n');
-    try writeNestedAssetDef(writer, "ShaderProgram", "ShaderPrograms", shader_programs, 0);
-    try writer.writeByte('\n');
-    try writeNestedAssetDef(writer, "Texture", "Textures", textures, 0);
-    try writer.writeByte('\n');
-
-    try writer.writeAll("pub const asset_paths = [_][]const u8{\n");
-    for (asset_paths) |path| {
-        try std.fmt.format(writer, "    \"{}\",\n", .{std.zig.fmtEscapes(path)});
-    }
-    try writer.writeAll("};\n\n");
-
-    try writer.writeAll("pub const asset_path_to_asset_id = std.ComptimeStringMap(u32, .{\n");
-    for (asset_paths, 0..) |path, i| {
-        try std.fmt.format(writer, "    .{{ \"{}\", {} }},\n", .{ std.zig.fmtEscapes(path), i + 1 });
-    }
-    try writer.writeAll("});\n\n");
-
-    const result = mesh_asset_manifest.toOwnedSlice() catch @panic("OOM");
-    const write_step = b.addWriteFiles();
-    const manifest_path = write_step.add("asset_manifest.gen.zig", result);
-    return manifest_path;
+    return asset_manifest_file;
 }
 
 fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode) *Step.Compile {

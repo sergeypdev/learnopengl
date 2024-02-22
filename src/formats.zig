@@ -142,8 +142,8 @@ test "ShaderProgram serialization" {
     try std.testing.expectEqual(source, result.*);
 }
 
-pub fn writeShaderProgram(writer: anytype, shader: u32, vertex: bool, fragment: bool, endian: std.builtin.Endian) !void {
-    try writer.writeInt(u32, shader, endian);
+pub fn writeShaderProgram(writer: anytype, shader: u64, vertex: bool, fragment: bool, endian: std.builtin.Endian) !void {
+    try writer.writeInt(u64, shader, endian);
     try writer.writeInt(
         u8,
         @bitCast(ShaderProgram.Flags{ .vertex = vertex, .fragment = fragment }),

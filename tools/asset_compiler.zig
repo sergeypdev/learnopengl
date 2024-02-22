@@ -1,6 +1,9 @@
 const std = @import("std");
 const formats = @import("formats");
-const asset_manifest = @import("asset_manifest");
+const types = @import("types.zig");
+const AssetType = types.AssetType;
+const AssetPath = types.AssetPath;
+const asset_list = @import("asset_list.zig");
 const Vector2 = formats.Vector2;
 const Vector3 = formats.Vector3;
 const c = @cImport({
@@ -16,14 +19,6 @@ const c = @cImport({
 
 const ASSET_MAX_BYTES = 1024 * 1024 * 1024;
 
-const AssetType = enum {
-    Mesh,
-    Shader,
-    ShaderProgram,
-    Texture,
-    HDRTexture,
-};
-
 pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
     if (std.mem.endsWith(u8, path, ".obj")) {
         return .Mesh;
@@ -34,11 +29,8 @@ pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
     if (std.mem.endsWith(u8, path, ".glsl")) {
         return .Shader;
     }
-    if (std.mem.endsWith(u8, path, ".png") or std.mem.endsWith(u8, path, ".jpg")) {
+    if (std.mem.endsWith(u8, path, ".png") or std.mem.endsWith(u8, path, ".jpg") or std.mem.endsWith(u8, path, ".exr")) {
         return .Texture;
-    }
-    if (std.mem.endsWith(u8, path, ".exr")) {
-        return .HDRTexture;
     }
     return null;
 }
@@ -54,15 +46,27 @@ pub fn main() !void {
     const input = argv[argv.len - 2];
     const output = std.mem.span(argv[argv.len - 1]);
 
+    var cwd_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const cwd_path = try std.os.getcwd(&cwd_buf);
+
+    const build_root_rel_input = try std.fs.path.relative(allocator, cwd_path, std.mem.span(input));
+
     const asset_type = resolveAssetTypeByExtension(std.mem.span(input)) orelse return error.UnknownAssetType;
 
     switch (asset_type) {
         .Mesh => try processMesh(allocator, input, output),
+        .Shader => try std.fs.copyFileAbsolute(std.mem.span(input), output, .{}),
         .ShaderProgram => try processShaderProgram(allocator, std.mem.span(input), output),
         .Texture => try processTexture(allocator, input, output, false),
-        .HDRTexture => try processTexture(allocator, input, output, true),
-        else => return error.CantProcessAssetType,
     }
+
+    const out_writer = std.io.getStdOut().writer();
+
+    try asset_list.writeAssetListEntryText(out_writer, .{
+        .type = asset_type,
+        .src_path = .{ .simple = build_root_rel_input },
+        .dst_path = output,
+    });
 }
 
 fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []const u8) !void {
@@ -187,7 +191,8 @@ fn processShaderProgram(allocator: std.mem.Allocator, absolute_input: []const u8
 
     const shader_path = try std.fs.path.resolve(allocator, &.{ input_dir, program.value.shader });
 
-    const shader_asset_id = asset_manifest.getAssetByPath(shader_path);
+    const relative_path = try std.fs.path.relative(allocator, try std.fs.cwd().realpathAlloc(allocator, "."), shader_path);
+    const shader_asset_id = types.AssetPath.fromString(relative_path).hash();
     if (shader_asset_id == 0) {
         std.log.debug("{s}\n", .{shader_path});
         return error.InvalidShaderPath;

@@ -5,10 +5,11 @@ pub const Shaders = manifest.Shaders;
 pub const ShaderPrograms = manifest.ShaderPrograms;
 pub const Textures = manifest.Textures;
 
-pub fn getPath(asset_id: u32) []const u8 {
+pub fn getPath(asset_id: u64) []const u8 {
+    manifest.init();
     if (asset_id == 0) return "";
 
-    return manifest.asset_paths[asset_id - 1];
+    return manifest.asset_paths.get(asset_id) orelse "";
 }
 
 pub fn getAssetByPath(path: []const u8) u32 {
