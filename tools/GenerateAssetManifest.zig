@@ -55,7 +55,7 @@ fn make(step: *Step, prog_node: *std.Progress.Node) !void {
     // Random bytes to make WriteFile unique. Refresh this with
     // new random bytes when GenerateAssetManifest implementation is modified
     // in a non-backwards-compatible way.
-    man.hash.add(@as(u32, 0xd767ee68));
+    man.hash.add(@as(u32, 0xd767ee71));
 
     // TODO: sort generated asset lists to make sure cache is predictable
 
@@ -195,14 +195,14 @@ const NestedAssetDef = union(enum) {
         var iter = try std.fs.path.componentIterator(path.getPath());
         const filename = iter.last().?.name;
         _ = iter.first();
-        // Skip first one because it's always "assets"
-        _ = iter.next();
 
         var current = &self.path;
 
         while (iter.next()) |comp| {
+            std.log.debug("NestedAssetDef comp next {s}\n", .{comp.name});
             if (comp.name.ptr == filename.ptr) break;
             const gop = try current.getOrPut(allocator, comp.name);
+            std.log.debug("NestedAssetDef put path {s}\n", .{comp.name});
             if (!gop.found_existing) {
                 gop.value_ptr.* = NestedAssetDef{ .path = .{} };
             }
@@ -216,6 +216,7 @@ const NestedAssetDef = union(enum) {
             }
             try gop.value_ptr.put(allocator, .{ .simple = sub_path }, asset_list_entry);
         } else {
+            std.log.debug("NestedAssetDef put filename {s}\n", .{std.fs.path.stem(filename)});
             try current.put(allocator, std.fs.path.stem(filename), NestedAssetDef{
                 .asset = asset_list_entry,
             });

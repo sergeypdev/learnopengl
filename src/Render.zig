@@ -119,7 +119,7 @@ pub fn begin(self: *Render) void {
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.mesh).program);
+    gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
     gl.bindVertexArray(self.mesh_vao);
 
     if (self.gl_fences[self.tripple_buffer_index]) |fence| {

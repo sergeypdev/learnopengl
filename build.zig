@@ -146,12 +146,12 @@ pub fn build(b: *Build) void {
 }
 
 const asset_extensions = [_][]const u8{
-    ".obj",
-    ".glsl",
-    ".prog",
-    ".png",
-    ".jpg",
-    ".exr",
+    "obj",
+    "glsl",
+    "prog",
+    "png",
+    "jpg",
+    "exr",
 };
 
 // Find all assets and cook them using assetc
@@ -168,107 +168,40 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
     defer walker.deinit();
 
     while (try walker.next()) |entry| {
-        if (std.mem.endsWith(u8, entry.basename, ".obj")) {
-            const run_assetc = b.addRunArtifact(assetc);
-            gen_asset_manifest.addAssetListFile(run_assetc.captureStdOut());
-            run_assetc.step.dependOn(install_assetc_step);
+        const ext_with_dot = std.fs.path.extension(entry.basename);
+        if (ext_with_dot.len == 0) continue;
 
-            run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
+        const ext = ext_with_dot[1..];
 
-            run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
-            const out_name = try std.mem.concat(
-                b.allocator,
-                u8,
-                &.{ std.fs.path.stem(entry.basename), ".mesh" },
-            );
-            const compiled_file = run_assetc.addOutputFileArg(out_name);
-
-            const out_path = b.pathJoin(&.{
-                path,
-                std.fs.path.dirname(entry.path) orelse "",
-                out_name,
-            });
-            const install_asset = b.addInstallFileWithDir(
-                compiled_file,
-                .prefix,
-                out_path,
-            );
-            step.dependOn(&install_asset.step);
+        var is_known_ext = false;
+        for (asset_extensions) |known_ext| {
+            if (std.mem.eql(u8, known_ext, ext)) {
+                is_known_ext = true;
+                break;
+            }
         }
+        if (!is_known_ext) continue;
 
-        if (std.mem.endsWith(u8, entry.basename, ".glsl")) {
-            const run_assetc = b.addRunArtifact(assetc);
-            run_assetc.step.dependOn(install_assetc_step);
+        const run_assetc = b.addRunArtifact(assetc);
+        gen_asset_manifest.addAssetListFile(run_assetc.captureStdOut());
+        run_assetc.step.dependOn(install_assetc_step);
 
-            gen_asset_manifest.addAssetListFile(run_assetc.captureStdOut());
+        run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
 
-            run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
+        // First argument, input path relative to base assets dir
+        run_assetc.addArg(b.dupe(entry.path));
+        // Absolute input file arg, this will add it to step deps, cache and all that good stuff
+        run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
 
-            run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
-            const compiled_file = run_assetc.addOutputFileArg(b.dupe(entry.basename));
+        // Generated output dir. Output asset(s) will be placed there at the same relative path as input
+        const result_dir = run_assetc.addOutputFileArg("assets");
 
-            const out_path = b.pathJoin(&.{
-                path,
-                entry.path,
-            });
-            const install_asset = b.addInstallFileWithDir(
-                compiled_file,
-                .prefix,
-                out_path,
-            );
-            step.dependOn(&install_asset.step);
-        }
-
-        // Shader program
-        if (std.mem.endsWith(u8, entry.basename, ".prog")) {
-            const run_assetc = b.addRunArtifact(assetc);
-            run_assetc.step.dependOn(install_assetc_step);
-
-            gen_asset_manifest.addAssetListFile(run_assetc.captureStdOut());
-
-            run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
-
-            run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
-            const compiled_file = run_assetc.addOutputFileArg(b.dupe(entry.basename));
-
-            const out_path = b.pathJoin(&.{
-                path,
-                entry.path,
-            });
-            const install_asset = b.addInstallFileWithDir(
-                compiled_file,
-                .prefix,
-                out_path,
-            );
-            step.dependOn(&install_asset.step);
-        }
-
-        if (std.mem.endsWith(u8, entry.basename, ".png") or std.mem.endsWith(u8, entry.basename, ".jpg") or std.mem.endsWith(u8, entry.basename, ".exr")) {
-            const run_assetc = b.addRunArtifact(assetc);
-            run_assetc.step.dependOn(install_assetc_step);
-            run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
-            gen_asset_manifest.addAssetListFile(run_assetc.captureStdOut());
-
-            run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
-            const out_name = try std.mem.concat(
-                b.allocator,
-                u8,
-                &.{ std.fs.path.stem(entry.basename), ".tex" },
-            );
-            const compiled_file = run_assetc.addOutputFileArg(out_name);
-
-            const out_path = b.pathJoin(&.{
-                path,
-                std.fs.path.dirname(entry.path) orelse "",
-                out_name,
-            });
-            const install_asset = b.addInstallFileWithDir(
-                compiled_file,
-                .prefix,
-                out_path,
-            );
-            step.dependOn(&install_asset.step);
-        }
+        const install_assets = b.addInstallDirectory(.{
+            .source_dir = result_dir,
+            .install_dir = .prefix,
+            .install_subdir = path,
+        });
+        step.dependOn(&install_assets.step);
     }
 
     return asset_manifest_file;

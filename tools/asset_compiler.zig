@@ -38,40 +38,51 @@ pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
     const argv = std.os.argv;
-    if (argv.len < 3) {
-        std.log.err("usage assetc <basedir> <input> <output>\n", .{});
+    if (argv.len < 4) {
+        std.log.err("usage assetc <rel_path> <input> <output>\n", .{});
         return error.MissingArgs;
     }
 
-    const input = argv[argv.len - 2];
-    const output = std.mem.span(argv[argv.len - 1]);
+    const rel_input = std.mem.span(argv[argv.len - 3]);
+    const abs_input = std.mem.span(argv[argv.len - 2]);
+    const output_dir_path = std.mem.span(argv[argv.len - 1]);
 
     var cwd_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const cwd_path = try std.os.getcwd(&cwd_buf);
 
-    const build_root_rel_input = try std.fs.path.relative(allocator, cwd_path, std.mem.span(input));
+    const cwd_rel_input = try std.fs.path.relative(allocator, cwd_path, abs_input);
+    const cwd_rel_output_dir = try std.fs.path.relative(allocator, cwd_path, output_dir_path);
 
-    const asset_type = resolveAssetTypeByExtension(std.mem.span(input)) orelse return error.UnknownAssetType;
+    // Generated output dir
+    var output_dir = blk: {
+        var base_output_dir = try std.fs.cwd().makeOpenPath(cwd_rel_output_dir, .{});
+        defer base_output_dir.close();
+
+        break :blk try base_output_dir.makeOpenPath(std.fs.path.dirname(rel_input) orelse ".", .{});
+    };
+    defer output_dir.close();
+
+    const asset_type = resolveAssetTypeByExtension(abs_input) orelse return error.UnknownAssetType;
 
     switch (asset_type) {
-        .Mesh => try processMesh(allocator, input, output),
-        .Shader => try std.fs.copyFileAbsolute(std.mem.span(input), output, .{}),
-        .ShaderProgram => try processShaderProgram(allocator, std.mem.span(input), output),
-        .Texture => try processTexture(allocator, input, output, false),
+        .Mesh => try processMesh(allocator, abs_input, output_dir),
+        .Shader => try std.fs.Dir.copyFile(std.fs.cwd(), abs_input, output_dir, std.fs.path.basename(rel_input), .{}),
+        .ShaderProgram => try processShaderProgram(allocator, abs_input, output_dir),
+        .Texture => try processTexture(allocator, abs_input, output_dir, false),
     }
 
     const out_writer = std.io.getStdOut().writer();
 
     try asset_list.writeAssetListEntryText(out_writer, .{
         .type = asset_type,
-        .src_path = .{ .simple = build_root_rel_input },
-        .dst_path = output,
+        .src_path = .{ .simple = cwd_rel_input }, // TODO: remove assets prefix
+        .dst_path = cwd_rel_output_dir,
     });
 }
 
-fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []const u8) !void {
+fn processMesh(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir) !void {
     const maybe_scene: ?*const c.aiScene = @ptrCast(c.aiImportFile(
-        input,
+        input.ptr,
         c.aiProcess_CalcTangentSpace | c.aiProcess_Triangulate | c.aiProcess_JoinIdenticalVertices | c.aiProcess_SortByPType | c.aiProcess_GenNormals,
     ));
     if (maybe_scene == null) {
@@ -152,7 +163,9 @@ fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []con
         .indices = indices,
     };
 
-    const out_file = try std.fs.createFileAbsolute(output, .{});
+    const out_name = try changeExtensionAlloc(allocator, input, AssetType.Mesh.ext());
+
+    const out_file = try output_dir.createFile(out_name, .{});
     defer out_file.close();
     var buf_writer = std.io.bufferedWriter(out_file.writer());
 
@@ -164,7 +177,7 @@ fn processMesh(allocator: std.mem.Allocator, input: [*:0]const u8, output: []con
     try buf_writer.flush();
 }
 
-fn processShaderProgram(allocator: std.mem.Allocator, absolute_input: []const u8, output: []const u8) !void {
+fn processShaderProgram(allocator: std.mem.Allocator, absolute_input: []const u8, output_dir: std.fs.Dir) !void {
     var cwd_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const cwd_path = try std.os.getcwd(&cwd_buf);
 
@@ -198,7 +211,7 @@ fn processShaderProgram(allocator: std.mem.Allocator, absolute_input: []const u8
         return error.InvalidShaderPath;
     }
 
-    const out_file = try std.fs.createFileAbsolute(output, .{});
+    const out_file = try output_dir.createFile(std.fs.path.basename(absolute_input), .{});
     defer out_file.close();
     var buf_writer = std.io.bufferedWriter(out_file.writer());
 
@@ -212,11 +225,11 @@ const MipLevel = struct {
     out_data: []const u8 = &.{},
 };
 
-fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []const u8, hdr: bool) !void {
+fn processTexture(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, hdr: bool) !void {
     _ = hdr; // autofix
 
     // For tex.norm.png - this will be ".norm"
-    const sub_ext = std.fs.path.extension(std.fs.path.stem(std.mem.span(input)));
+    const sub_ext = std.fs.path.extension(std.fs.path.stem(input));
     const format = if (std.mem.eql(u8, sub_ext, ".norm")) formats.Texture.Format.bc5 else formats.Texture.Format.bc7;
 
     var width_int: c_int = undefined;
@@ -224,7 +237,7 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
     var comps: c_int = undefined;
 
     c.stbi_set_flip_vertically_on_load(1);
-    const rgba_data_c = c.stbi_load(input, &width_int, &height_int, &comps, 4);
+    const rgba_data_c = c.stbi_load(input.ptr, &width_int, &height_int, &comps, 4);
     if (rgba_data_c == null) {
         return error.ImageLoadError;
     }
@@ -308,7 +321,8 @@ fn processTexture(allocator: std.mem.Allocator, input: [*:0]const u8, output: []
         },
         .data = out_data,
     };
-    const out_file = try std.fs.createFileAbsolute(output, .{});
+    const out_name = try changeExtensionAlloc(allocator, input, AssetType.Texture.ext());
+    const out_file = try output_dir.createFile(out_name, .{});
     defer out_file.close();
     var buf_writer = std.io.bufferedWriter(out_file.writer());
 
@@ -507,4 +521,11 @@ inline fn storeColorVec4(pixel: []u8, vec: @Vector(4, f32)) void {
     pixel[1] = @intFromFloat(out[1]);
     pixel[2] = @intFromFloat(out[2]);
     pixel[3] = @intFromFloat(out[3]);
+}
+
+fn changeExtensionAlloc(allocator: std.mem.Allocator, input: []const u8, new_ext: []const u8) ![]u8 {
+    const input_basename = std.fs.path.basename(input);
+    const ext = std.fs.path.extension(input_basename);
+    const name_without_ext = input_basename[0 .. input_basename.len - ext.len];
+    return try std.mem.concat(allocator, u8, &.{ name_without_ext, ".", new_ext });
 }
