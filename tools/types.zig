@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const AssetType = enum {
+    Scene,
     Mesh,
     Shader,
     ShaderProgram,
@@ -8,6 +9,7 @@ pub const AssetType = enum {
 
     pub fn pluralName(self: AssetType) []const u8 {
         return switch (self) {
+            .Scene => "Scenes",
             .Mesh => "Meshes",
             .Shader => "Shaders",
             .ShaderProgram => "ShaderPrograms",
@@ -17,6 +19,7 @@ pub const AssetType = enum {
 
     pub fn ext(self: AssetType) []const u8 {
         return switch (self) {
+            .Scene => "scn",
             .Mesh => "mesh",
             .Shader => "glsl",
             .ShaderProgram => "prog",

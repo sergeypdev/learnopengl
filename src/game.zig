@@ -142,7 +142,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
     gl.viewport(0, 0, globals.g_init.width, globals.g_init.height);
 
-    _ = globals.g_mem.world.addEntity(.{
+    const light1 = globals.g_mem.world.addEntity(.{
         .transform = .{ .pos = Vec3.new(1.8, 1, 0) },
         .flags = .{ .point_light = true, .rotate = true },
         .point_light = .{ .color_intensity = Vec4.new(1.0, 0.3, 0.1, 100.0), .radius = 0.1 },
@@ -150,7 +150,8 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     });
 
     _ = globals.g_mem.world.addEntity(.{
-        .transform = .{ .pos = Vec3.new(-2, 1, 0) },
+        .transform = .{ .pos = Vec3.new(-2, 0, 0) },
+        .parent = light1,
         .flags = .{ .point_light = true, .rotate = true },
         .point_light = .{
             .color_intensity = Vec4.new(0.2, 0.5, 1.0, 100.0),
@@ -371,11 +372,11 @@ export fn game_update() bool {
                         ent.rotate.rate * gmem.delta_time,
                         ent.rotate.axis,
                     ).mulByVec4(Vec4.new(old_pos.x(), old_pos.y(), old_pos.z(), 1));
-                    ent.transform.pos = Vec3.new(new_pos.x(), new_pos.y(), new_pos.z());
+                    ent.transform.setPos(Vec3.new(new_pos.x(), new_pos.y(), new_pos.z()));
                 }
 
                 if (ent.flags.point_light) {
-                    const pos = ent.transform.pos;
+                    const pos = ent.globalMatrix(&gmem.world).extractTranslation();
                     var pos4 = Vec4.new(pos.x(), pos.y(), pos.z(), 1.0);
                     pos4 = gmem.render.camera.view_mat.mulByVec4(pos4);
 
@@ -400,13 +401,13 @@ export fn game_update() bool {
                 gmem.render.draw(.{
                     .mesh = ent.mesh.handle,
                     .material = ent.mesh.material,
-                    .transform = ent.transform.matrix(),
+                    .transform = ent.globalMatrix(&gmem.world).*,
                 });
             } else if (ent.flags.point_light) {
                 gmem.render.draw(.{
                     .mesh = a.Meshes.sphere,
                     .material = .{ .albedo = ent.point_light.color() },
-                    .transform = ent.transform.matrix(),
+                    .transform = ent.globalMatrix(&gmem.world).*,
                 });
             }
         }

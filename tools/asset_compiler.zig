@@ -69,6 +69,7 @@ pub fn main() !void {
         .Shader => try std.fs.Dir.copyFile(std.fs.cwd(), abs_input, output_dir, std.fs.path.basename(rel_input), .{}),
         .ShaderProgram => try processShaderProgram(allocator, abs_input, output_dir),
         .Texture => try processTexture(allocator, abs_input, output_dir, false),
+        .Scene => return error.NotImplemented,
     }
 
     const out_writer = std.io.getStdOut().writer();

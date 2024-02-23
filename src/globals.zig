@@ -44,9 +44,25 @@ pub const Entity = struct {
         rot: Quat = Quat.identity(),
         scale: Vec3 = Vec3.one(),
 
-        pub fn matrix(self: *Transform) Mat4 {
-            // TODO: cache
-            return Mat4.recompose(self.pos, self.rot, self.scale);
+        _local_dirty: bool = true,
+        _local: Mat4 = Mat4.identity(),
+
+        _global_dirty: bool = true,
+        _global: Mat4 = Mat4.identity(),
+
+        pub fn dirty(self: *Transform) void {
+            self._local_dirty = true;
+            self._global_dirty = true;
+        }
+
+        pub fn setPos(self: *Transform, new_pos: Vec3) void {
+            self.pos = new_pos;
+            self.dirty();
+        }
+
+        pub fn translate(self: *Transform, by: Vec3) void {
+            self.pos = self.pos.add(by);
+            self.dirty();
         }
     };
 
@@ -75,10 +91,35 @@ pub const Entity = struct {
     next: ?*Entity = null,
 
     flags: Flags = .{},
+    parent: ?EntityHandle = null,
     transform: Transform = .{},
     mesh: Mesh = .{},
     point_light: PointLight = .{},
     rotate: Rotate = .{},
+
+    pub fn localMatrix(self: *Entity) *const Mat4 {
+        if (self.transform._local_dirty) {
+            self.transform._local = Mat4.recompose(self.transform.pos, self.transform.rot, self.transform.scale);
+            self.transform._local_dirty = false;
+        }
+        return &self.transform._local;
+    }
+
+    pub fn globalMatrix(self: *Entity, world: *World) *const Mat4 {
+        // TODO: think how to reduce pointer chasing
+        if (self.parent) |parent_ent| {
+            if (world.getEntity(parent_ent)) |parent| {
+                if (parent.transform._global_dirty or self.transform._global_dirty) {
+                    self.transform._global = parent.globalMatrix(world).mul(self.localMatrix().*);
+                    self.transform._global_dirty = false;
+                }
+
+                return &self.transform._global;
+            }
+        }
+
+        return self.localMatrix();
+    }
 };
 
 pub const EntityHandle = packed struct {
