@@ -112,6 +112,48 @@ fn loadGL() void {
         std.log.debug("Failed to load gl funcs GL_ARB_bindless_texture {}\n", .{err});
         @panic("gl.load");
     };
+    gl.debugMessageCallback(glDebugCallback, null);
+    gl.enable(gl.DEBUG_OUTPUT);
+}
+
+fn glDebugCallback(source: gl.GLenum, _type: gl.GLenum, id: gl.GLuint, severity: gl.GLenum, length: gl.GLsizei, message: [*:0]const u8, userParam: ?*anyopaque) callconv(.C) void {
+    _ = userParam; // autofix
+    const source_str = switch (source) {
+        gl.DEBUG_SOURCE_API => "API",
+        gl.DEBUG_SOURCE_WINDOW_SYSTEM => "WindowSystem",
+        gl.DEBUG_SOURCE_APPLICATION => "App",
+        gl.DEBUG_SOURCE_SHADER_COMPILER => "ShaderCompiler",
+        gl.DEBUG_SOURCE_THIRD_PARTY => "ThirdParty",
+        gl.DEBUG_SOURCE_OTHER => "Other",
+        else => unreachable,
+    };
+    const type_str = switch (_type) {
+        gl.DEBUG_TYPE_ERROR => "Error",
+        gl.DEBUG_TYPE_DEPRECATED_BEHAVIOR => "Deprecated Behaviour",
+        gl.DEBUG_TYPE_UNDEFINED_BEHAVIOR => "Undefined Behaviour",
+        gl.DEBUG_TYPE_PORTABILITY => "Portability",
+        gl.DEBUG_TYPE_PERFORMANCE => "Performance",
+        gl.DEBUG_TYPE_MARKER => "Marker",
+        gl.DEBUG_TYPE_PUSH_GROUP => "Push Group",
+        gl.DEBUG_TYPE_POP_GROUP => "Pop Group",
+        gl.DEBUG_TYPE_OTHER => "Other",
+        else => unreachable,
+    };
+    switch (severity) {
+        gl.DEBUG_SEVERITY_HIGH => {
+            std.log.scoped(.OpenGL).err("{s}:{}:{s}: {s}", .{ source_str, id, type_str, message[0..@intCast(length)] });
+        },
+        gl.DEBUG_SEVERITY_MEDIUM => {
+            std.log.scoped(.OpenGL).warn("{s}:{}:{s}: {s}", .{ source_str, id, type_str, message[0..@intCast(length)] });
+        },
+        gl.DEBUG_SEVERITY_LOW => {
+            std.log.scoped(.OpenGL).debug("{s}:{}:{s}: {s}", .{ source_str, id, type_str, message[0..@intCast(length)] });
+        },
+        gl.DEBUG_SEVERITY_NOTIFICATION => {
+            std.log.scoped(.OpenGL).info("{s}:{}:{s}: {s}", .{ source_str, id, type_str, message[0..@intCast(length)] });
+        },
+        else => unreachable,
+    }
 }
 
 const mesh_program = a.ShaderPrograms.mesh;
@@ -440,6 +482,7 @@ export fn game_shutdown() void {
     std.log.debug("game_shutdown\n", .{});
     gmem.global_allocator.free(gmem.frame_fba.buffer);
     gmem.global_allocator.destroy(gmem);
+    gl.disable(gl.DEBUG_OUTPUT);
 }
 
 export fn game_shutdown_window() void {

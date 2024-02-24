@@ -161,8 +161,6 @@ pub fn begin(self: *Render) void {
         gl.deleteSync(fence);
         self.gl_fences[self.tripple_buffer_index] = null;
     }
-
-    self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
 }
 
 pub fn getPointLights(self: *Render) *PointLightArray {
@@ -244,8 +242,9 @@ pub fn draw(self: *Render, cmd: DrawCommand) void {
 }
 
 pub fn finish(self: *Render) void {
-    _ = self; // autofix
     const ginit = globals.g_init;
+
+    self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     c.SDL_GL_SwapWindow(ginit.window);
     c.SDL_Delay(1);
 }
