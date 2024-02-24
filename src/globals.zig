@@ -2,6 +2,9 @@ const std = @import("std");
 const c = @import("sdl.zig");
 const AssetManager = @import("AssetManager.zig");
 const Render = @import("Render.zig");
+const formats = @import("formats.zig");
+const Material = formats.Material;
+const Scene = formats.Scene;
 
 const za = @import("zalgebra");
 const Vec2 = za.Vec2;
@@ -37,9 +40,10 @@ pub const Entity = struct {
         mesh: bool = false,
         point_light: bool = false,
         rotate: bool = false,
+        _pad: u4 = 0, // make it abi sized
     };
 
-    pub const Transform = struct {
+    pub const Transform = extern struct {
         pos: Vec3 = Vec3.zero(),
         rot: Quat = Quat.identity(),
         scale: Vec3 = Vec3.one(),
@@ -64,13 +68,18 @@ pub const Entity = struct {
             self.pos = self.pos.add(by);
             self.dirty();
         }
+
+        pub fn rotate(self: *Transform, axis: Vec3, angle: f32) void {
+            self.rot = self.rot.mul(Quat.fromAxis(angle, axis));
+            self.dirty();
+        }
     };
 
-    pub const Mesh = struct {
+    pub const Mesh = extern struct {
         handle: AssetManager.Handle.Mesh = .{},
-        material: Render.Material = .{},
+        material: Material = .{},
     };
-    pub const PointLight = struct {
+    pub const PointLight = extern struct {
         radius: f32 = std.math.floatEps(f32), // should never be 0 or bad things happen
         color_intensity: Vec4 = Vec4.one(), // x, y, z - color, w - intensity
 
@@ -79,9 +88,18 @@ pub const Entity = struct {
             return Vec3.new(col.x(), col.y(), col.z());
         }
     };
-    pub const Rotate = struct {
+    pub const Rotate = extern struct {
         axis: Vec3 = Vec3.up(),
         rate: f32 = 0, // deg/s
+    };
+
+    /// Serializable entity data
+    pub const Data = extern struct {
+        flags: Flags = .{},
+        transform: Transform = .{},
+        mesh: Mesh = .{},
+        point_light: PointLight = .{},
+        rotate: Rotate = .{},
     };
 
     // Entity list and handle management
@@ -90,31 +108,33 @@ pub const Entity = struct {
     // Free list
     next: ?*Entity = null,
 
-    flags: Flags = .{},
     parent: ?EntityHandle = null,
-    transform: Transform = .{},
-    mesh: Mesh = .{},
-    point_light: PointLight = .{},
-    rotate: Rotate = .{},
+
+    data: Data = .{},
+
+    pub fn setParent(self: *Entity, parent: ?EntityHandle) void {
+        self.parent = parent;
+        self.data.transform.dirty();
+    }
 
     pub fn localMatrix(self: *Entity) *const Mat4 {
-        if (self.transform._local_dirty) {
-            self.transform._local = Mat4.recompose(self.transform.pos, self.transform.rot, self.transform.scale);
-            self.transform._local_dirty = false;
+        if (self.data.transform._local_dirty) {
+            self.data.transform._local = Mat4.recompose(self.data.transform.pos, self.data.transform.rot, self.data.transform.scale);
+            self.data.transform._local_dirty = false;
         }
-        return &self.transform._local;
+        return &self.data.transform._local;
     }
 
     pub fn globalMatrix(self: *Entity, world: *World) *const Mat4 {
         // TODO: think how to reduce pointer chasing
         if (self.parent) |parent_ent| {
             if (world.getEntity(parent_ent)) |parent| {
-                if (parent.transform._global_dirty or self.transform._global_dirty) {
-                    self.transform._global = parent.globalMatrix(world).mul(self.localMatrix().*);
-                    self.transform._global_dirty = false;
+                if (parent.data.transform._global_dirty or self.data.transform._global_dirty) {
+                    self.data.transform._global = parent.globalMatrix(world).mul(self.localMatrix().*);
+                    self.data.transform._global_dirty = false;
                 }
 
-                return &self.transform._global;
+                return &self.data.transform._global;
             }
         }
 
@@ -123,16 +143,28 @@ pub const Entity = struct {
 };
 
 pub const EntityHandle = packed struct {
-    idx: u32,
-    gen: u32,
+    idx: u32 = 0,
+    gen: u32 = 0,
+
+    /// Returns handle with 0 idx and gen.
+    /// 0 gen is invalid, valid generations start from 0
+    pub fn invalid() EntityHandle {
+        return EntityHandle{};
+    }
+};
+
+pub const EntityCreateResult = struct {
+    handle: EntityHandle,
+    ptr: *Entity,
 };
 
 pub const World = struct {
+    frame_arena: std.mem.Allocator,
     entities: [MAX_ENTITIES]Entity = [_]Entity{.{}} ** MAX_ENTITIES,
     entity_count: usize = 0,
     free_entity: ?*Entity = null,
 
-    pub fn addEntity(self: *World, entity: Entity) EntityHandle {
+    pub fn addEntity(self: *World, data: Entity.Data) EntityCreateResult {
         const ent = result: {
             if (self.free_entity) |ent| {
                 break :result ent;
@@ -146,16 +178,44 @@ pub const World = struct {
         const next = ent.next;
         const gen = ent.gen;
         const idx = ent.idx;
-        ent.* = entity;
+        ent.data = data;
+        // TODO: handle wrapping
         ent.gen = gen + 1;
         ent.idx = idx;
-        ent.flags.active = true;
+        ent.data.flags.active = true;
         self.free_entity = next;
 
-        return EntityHandle{ .idx = idx, .gen = ent.gen };
+        return EntityCreateResult{
+            .handle = EntityHandle{ .idx = idx, .gen = ent.gen },
+            .ptr = ent,
+        };
+    }
+
+    /// Spawns a scene and returns a hand to the root entity
+    pub fn createScene(self: *World, scene: *const Scene) EntityHandle {
+        if (scene.entities.len == 0) {
+            return EntityHandle.invalid();
+        }
+
+        const handles = self.frame_arena.alloc(EntityHandle, scene.entities.len) catch @panic("OOM"); // not handling error, this is unrecoverable
+
+        for (0.., handles, scene.entities, scene.parents) |i, *out_handle, *ent, parent| {
+            const res = self.addEntity(ent.*);
+            out_handle.* = res.handle;
+
+            if (parent >= 0) {
+                std.debug.assert(parent < i);
+                res.ptr.parent = handles[@intCast(parent)];
+            }
+        }
+
+        return handles[0];
     }
 
     pub fn getEntity(self: *World, handle: EntityHandle) ?*Entity {
+        // Gen 0 is always invalid
+        if (handle.gen == 0) return null;
+
         const ent = &self.entities[handle.idx];
         if (ent.gen != handle.gen) {
             return null;
@@ -183,7 +243,7 @@ pub const GameMemory = struct {
     input_state: InputState = .{},
     free_cam: FreeLookCamera = .{},
     mouse_focus: bool = false,
-    world: World = .{},
+    world: World,
 };
 
 pub const InputState = packed struct {

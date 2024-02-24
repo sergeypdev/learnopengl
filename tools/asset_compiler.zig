@@ -7,6 +7,8 @@ const asset_list = @import("asset_list.zig");
 const AssetListEntry = asset_list.AssetListEntry;
 const Vector2 = formats.Vector2;
 const Vector3 = formats.Vector3;
+const za = @import("zalgebra");
+const Vec3 = za.Vec3;
 const c = @cImport({
     @cInclude("assimp/cimport.h");
     @cInclude("assimp/scene.h");
@@ -22,8 +24,8 @@ const c = @cImport({
 const ASSET_MAX_BYTES = 1024 * 1024 * 1024;
 
 pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
-    if (std.mem.endsWith(u8, path, ".obj")) {
-        return .Mesh;
+    if (std.mem.endsWith(u8, path, ".obj") or std.mem.endsWith(u8, path, ".fbx")) {
+        return .Scene;
     }
     if (std.mem.endsWith(u8, path, ".prog")) {
         return .ShaderProgram;
@@ -69,11 +71,11 @@ pub fn main() !void {
     std.log.debug("rel_input: {s}", .{rel_input});
 
     switch (asset_type) {
-        .Mesh => try processMesh(allocator, rel_input, output_dir, asset_list_writer),
+        .Scene => try processScene(allocator, rel_input, output_dir, asset_list_writer),
         .Shader => try copyFile(asset_type, rel_input, output_dir, asset_list_writer),
         .ShaderProgram => try processShaderProgram(allocator, rel_input, output_dir, asset_list_writer),
         .Texture => try processTexture(allocator, rel_input, output_dir, asset_list_writer),
-        .Scene => return error.NotImplemented,
+        else => unreachable,
     }
     try buf_asset_list_writer.flush();
 }
@@ -95,7 +97,12 @@ fn copyFile(_type: AssetType, input: []const u8, output_dir: std.fs.Dir, asset_l
     try asset_list.writeAssetListEntryText(asset_list_writer, asset_list_entry);
 }
 
-fn createOutput(_type: AssetType, asset_path: AssetPath, output_dir: std.fs.Dir, writer: anytype) !std.fs.File {
+const AssetOutput = struct {
+    file: std.fs.File,
+    list_entry: AssetListEntry,
+};
+
+fn createOutput(_type: AssetType, asset_path: AssetPath, output_dir: std.fs.Dir, writer: anytype) !AssetOutput {
     const asset_list_entry = AssetListEntry{
         .type = _type,
         .src_path = asset_path,
@@ -109,10 +116,18 @@ fn createOutput(_type: AssetType, asset_path: AssetPath, output_dir: std.fs.Dir,
 
     try asset_list.writeAssetListEntryText(writer, asset_list_entry);
 
-    return try output_subdir.createFile(std.fs.path.basename(out_path), .{});
+    const file = try output_subdir.createFile(std.fs.path.basename(out_path), .{});
+
+    return AssetOutput{
+        .file = file,
+        .list_entry = asset_list_entry,
+    };
 }
 
-fn processMesh(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
+/// This can output either a single mesh (for simple formats like obj)
+/// or a scene + a bunch of sub assets (meshes, materials, textures, animations, etc.)
+/// It all depends on the source asset.
+fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
     const input_z = try std.mem.concatWithSentinel(allocator, u8, &.{input}, 0);
     const maybe_scene: ?*const c.aiScene = @ptrCast(c.aiImportFile(
         input_z.ptr,
@@ -126,10 +141,103 @@ fn processMesh(allocator: std.mem.Allocator, input: []const u8, output_dir: std.
     defer c.aiReleaseImport(scene);
 
     if (scene.mNumMeshes == 0) return error.NoMeshes;
-    if (scene.mNumMeshes > 1) return error.TooManyMeshes;
 
-    const mesh: *c.aiMesh = @ptrCast(scene.mMeshes[0]);
+    if (scene.mNumMeshes == 1) {
+        const mesh: *c.aiMesh = @ptrCast(scene.mMeshes[0]);
 
+        var output = try createOutput(.Mesh, AssetPath{ .simple = input }, output_dir, asset_list_writer);
+        defer output.file.close();
+
+        return try processMesh(allocator, scene, mesh, output.file);
+    } else {
+        const base_asset_path = AssetPath{ .simple = input };
+
+        const meshes: []*c.aiMesh = @ptrCast(scene.mMeshes[0..@intCast(scene.mNumMeshes)]);
+
+        var mesh_outputs = std.ArrayList(AssetListEntry).init(allocator);
+
+        for (meshes) |mesh| {
+            const name = mesh.mName.data[0..mesh.mName.length];
+
+            var output = try createOutput(.Mesh, base_asset_path.subPath(name), output_dir, asset_list_writer);
+            defer output.file.close();
+
+            try mesh_outputs.append(output.list_entry);
+
+            try processMesh(allocator, scene, mesh, output.file);
+        }
+
+        if (scene.mRootNode == null) return;
+
+        var node_to_entity_idx = std.AutoHashMap(*c.aiNode, usize).init(allocator);
+        var entities = std.ArrayList(formats.Entity.Data).init(allocator);
+        var parents = std.ArrayList(i64).init(allocator);
+
+        // Breadth first traversal
+        var nodeq = std.ArrayList(*c.aiNode).init(allocator);
+        try nodeq.append(@ptrCast(scene.mRootNode));
+
+        while (nodeq.popOrNull()) |node| {
+            if (node.mChildren != null) {
+                const children: []*c.aiNode = @ptrCast(node.mChildren[0..@intCast(node.mNumChildren)]);
+                for (0..children.len) |i| {
+                    // Reverse order, because pop taks from end of the list
+                    const child = children[children.len - i - 1];
+                    try nodeq.append(child);
+                }
+            }
+
+            try entities.append(.{});
+            const idx = entities.items.len - 1;
+            try node_to_entity_idx.put(node, idx);
+
+            const maybe_parent: ?*c.aiNode = @ptrCast(node.mParent);
+            if (maybe_parent) |parent| {
+                const parent_idx = node_to_entity_idx.get(parent) orelse return error.MissingParentIdx; // this is a bug in our code
+                try parents.append(@intCast(parent_idx));
+            } else {
+                try parents.append(-1);
+            }
+
+            const ent = &entities.items[idx];
+
+            // TODO: extract transform
+
+            if (node.mMeshes != null) {
+                const mesh_indices = node.mMeshes[0..node.mNumMeshes];
+                for (mesh_indices) |mesh_idx| {
+                    const mesh_entry = mesh_outputs.items[@intCast(mesh_idx)];
+                    ent.flags.mesh = true;
+                    ent.flags.rotate = true;
+
+                    // TODO: turn multiple meshes into sub-entities
+                    ent.mesh = .{
+                        .handle = .{ .id = mesh_entry.src_path.hash() },
+                        // TODO: extract material
+                    };
+                    ent.rotate = .{ .axis = Vec3.up(), .rate = 80 };
+                }
+            }
+        }
+
+        const out_scene = formats.Scene{
+            .header = .{
+                .entity_count = @intCast(entities.items.len),
+            },
+            .entities = entities.items,
+            .parents = parents.items,
+        };
+
+        const output = try createOutput(.Scene, base_asset_path.subPath("scene"), output_dir, asset_list_writer);
+        defer output.file.close();
+        var buf_writer = std.io.bufferedWriter(output.file.writer());
+        try formats.writeScene(buf_writer.writer(), out_scene, formats.native_endian);
+        try buf_writer.flush();
+    }
+}
+
+fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, mesh: *const c.aiMesh, out_file: std.fs.File) !void {
+    _ = scene; // autofix
     if (mesh.mNormals == null) return error.MissingNormals;
     if (mesh.mTangents == null) return error.MissingTangents;
     if (mesh.mTextureCoords[0] == null) return error.MissingUVs;
@@ -196,10 +304,7 @@ fn processMesh(allocator: std.mem.Allocator, input: []const u8, output_dir: std.
         .indices = indices,
     };
 
-    var out_file = try createOutput(.Mesh, AssetPath{ .simple = input }, output_dir, asset_list_writer);
-    defer out_file.close();
     var buf_writer = std.io.bufferedWriter(out_file.writer());
-
     try formats.writeMesh(
         buf_writer.writer(),
         out_mesh,
@@ -236,9 +341,9 @@ fn processShaderProgram(allocator: std.mem.Allocator, input: []const u8, output_
         return error.InvalidShaderPath;
     }
 
-    var out_file = try createOutput(.ShaderProgram, AssetPath{ .simple = input }, output_dir, asset_list_writer);
-    defer out_file.close();
-    var buf_writer = std.io.bufferedWriter(out_file.writer());
+    const output = try createOutput(.ShaderProgram, AssetPath{ .simple = input }, output_dir, asset_list_writer);
+    defer output.file.close();
+    var buf_writer = std.io.bufferedWriter(output.file.writer());
 
     try formats.writeShaderProgram(buf_writer.writer(), shader_asset_id, program.value.vertex, program.value.fragment, formats.native_endian);
     try buf_writer.flush();
@@ -347,9 +452,9 @@ fn processTexture(allocator: std.mem.Allocator, input: []const u8, output_dir: s
         .data = out_data,
     };
 
-    const out_file = try createOutput(.Texture, AssetPath{ .simple = input }, output_dir, asset_list_writer);
-    defer out_file.close();
-    var buf_writer = std.io.bufferedWriter(out_file.writer());
+    const output = try createOutput(.Texture, AssetPath{ .simple = input }, output_dir, asset_list_writer);
+    defer output.file.close();
+    var buf_writer = std.io.bufferedWriter(output.file.writer());
 
     try formats.writeTexture(buf_writer.writer(), texture, formats.native_endian);
     try buf_writer.flush();

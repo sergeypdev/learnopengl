@@ -4,6 +4,7 @@ const c = @import("sdl.zig");
 const AssetManager = @import("AssetManager.zig");
 const a = @import("asset_manifest");
 const globals = @import("globals.zig");
+pub const Material = @import("formats.zig").Material;
 
 const za = @import("zalgebra");
 const Vec2 = za.Vec2;
@@ -27,9 +28,10 @@ mesh_vao: gl.GLuint = 0,
 tripple_buffer_index: usize = MAX_FRAMES_QUEUED - 1,
 gl_fences: [MAX_FRAMES_QUEUED]?gl.GLsync = [_]?gl.GLsync{null} ** MAX_FRAMES_QUEUED,
 camera_ubo: gl.GLuint = 0,
-camera_matrices: []CameraMatrices = &.{},
+camera_matrices: []u8 = &.{},
 point_lights_ubo: gl.GLuint = 0,
-point_lights: []PointLightArray = &.{},
+point_lights: []u8 = &.{},
+ubo_align: usize = 0,
 
 pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetman: *AssetManager) Render {
     var render = Render{
@@ -37,6 +39,13 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         .frame_arena = frame_arena,
         .assetman = assetman,
     };
+
+    var buffer_align_int: gl.GLint = 0;
+    gl.getIntegerv(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT, &buffer_align_int);
+
+    if (buffer_align_int == 0) @panic("Failed to query GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT");
+
+    render.ubo_align = @intCast(buffer_align_int);
 
     // MESH VAO
     var vao: gl.GLuint = 0;
@@ -72,17 +81,23 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         gl.createBuffers(1, &render.camera_ubo);
         std.debug.assert(render.camera_ubo != 0);
 
+        const buf_size = render.uboAlignedSizeOf(CameraMatrices) * MAX_FRAMES_QUEUED;
         gl.namedBufferStorage(
             render.camera_ubo,
-            @sizeOf(CameraMatrices) * MAX_FRAMES_QUEUED,
+            @intCast(buf_size),
             null,
             PERSISTENT_BUFFER_FLAGS,
         );
-        const camera_matrices_c: [*c]CameraMatrices = @alignCast(@ptrCast(gl.mapNamedBufferRange(render.camera_ubo, 0, @sizeOf(CameraMatrices) * MAX_FRAMES_QUEUED, PERSISTENT_BUFFER_FLAGS) orelse {
+        const camera_matrices_c: [*]u8 = @ptrCast(gl.mapNamedBufferRange(
+            render.camera_ubo,
+            0,
+            @intCast(buf_size),
+            PERSISTENT_BUFFER_FLAGS,
+        ) orelse {
             checkGLError();
             @panic("bind camera_ubo");
-        }));
-        render.camera_matrices = camera_matrices_c[0..MAX_FRAMES_QUEUED];
+        });
+        render.camera_matrices = camera_matrices_c[0..buf_size];
     }
 
     // Point lights ubo
@@ -90,22 +105,23 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         gl.createBuffers(1, &render.point_lights_ubo);
         std.debug.assert(render.camera_ubo != 0);
 
+        const buf_size = render.uboAlignedSizeOf(PointLightArray) * MAX_FRAMES_QUEUED;
         gl.namedBufferStorage(
             render.point_lights_ubo,
-            @sizeOf(PointLightArray) * MAX_FRAMES_QUEUED,
+            @intCast(buf_size),
             null,
             PERSISTENT_BUFFER_FLAGS,
         );
-        const point_lights_c: [*c]PointLightArray = @alignCast(@ptrCast(gl.mapNamedBufferRange(
+        const point_lights_c: [*]u8 = @ptrCast(gl.mapNamedBufferRange(
             render.point_lights_ubo,
             0,
-            @sizeOf(PointLightArray) * MAX_FRAMES_QUEUED,
+            @intCast(buf_size),
             PERSISTENT_BUFFER_FLAGS,
         ) orelse {
             checkGLError();
             @panic("bind point_lights_ubo");
-        }));
-        render.point_lights = point_lights_c[0..MAX_FRAMES_QUEUED];
+        });
+        render.point_lights = point_lights_c[0..buf_size];
     }
 
     return render;
@@ -123,7 +139,7 @@ pub fn begin(self: *Render) void {
     gl.bindVertexArray(self.mesh_vao);
 
     if (self.gl_fences[self.tripple_buffer_index]) |fence| {
-        const syncResult = gl.clientWaitSync(fence, gl.SYNC_FLUSH_COMMANDS_BIT, 9999999);
+        const syncResult = gl.clientWaitSync(fence, gl.SYNC_FLUSH_COMMANDS_BIT, 9999999999);
 
         switch (syncResult) {
             gl.ALREADY_SIGNALED => {
@@ -132,6 +148,7 @@ pub fn begin(self: *Render) void {
             gl.TIMEOUT_EXPIRED => {
                 // oh no, driver will crash soon :(
                 std.log.err("OpenGL clientWaitSync timeout expired D:\n", .{});
+                checkGLError();
             },
             gl.CONDITION_SATISFIED => {
                 // awesome
@@ -146,35 +163,43 @@ pub fn begin(self: *Render) void {
     }
 
     self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+}
+
+pub fn getPointLights(self: *Render) *PointLightArray {
+    return @alignCast(@ptrCast(self.point_lights[self.tripple_buffer_index * self.uboAlignedSizeOf(PointLightArray) ..].ptr));
+}
+
+pub fn flushUBOs(self: *Render) void {
+    const idx = self.tripple_buffer_index;
 
     {
-        const camera_matrix = &self.camera_matrices[self.tripple_buffer_index];
+        const camera_matrix: *CameraMatrices = @alignCast(@ptrCast(self.camera_matrices[idx * self.uboAlignedSizeOf(CameraMatrices) ..].ptr));
 
         camera_matrix.* = .{
             .projection = self.camera.projection(),
             .view = self.camera.view_mat,
         };
 
+        //gl.flushMappedNamedBufferRange(self.camera_ubo, idx * @sizeOf(CameraMatrices), @sizeOf(CameraMatrices));
         gl.bindBufferRange(
             gl.UNIFORM_BUFFER,
             UBO.CameraMatrices.value(),
             self.camera_ubo,
-            self.tripple_buffer_index * @sizeOf(CameraMatrices),
-            @sizeOf(CameraMatrices),
+            idx * self.uboAlignedSizeOf(CameraMatrices),
+            @intCast(self.uboAlignedSizeOf(CameraMatrices)),
         );
+        checkGLError();
     }
 
+    // gl.flushMappedNamedBufferRange(self.point_lights_ubo, idx * @sizeOf(PointLightArray), @sizeOf(PointLightArray));
     gl.bindBufferRange(
         gl.UNIFORM_BUFFER,
         UBO.PointLights.value(),
         self.point_lights_ubo,
-        self.tripple_buffer_index * @sizeOf(PointLightArray),
-        @sizeOf(PointLightArray),
+        idx * self.uboAlignedSizeOf(PointLightArray),
+        @intCast(self.uboAlignedSizeOf(PointLightArray)),
     );
-}
-
-pub fn getPointLights(self: *Render) *PointLightArray {
-    return &self.point_lights[self.tripple_buffer_index];
+    checkGLError();
 }
 
 pub fn draw(self: *Render, cmd: DrawCommand) void {
@@ -321,14 +346,6 @@ pub const PointLightArray = extern struct {
     count: c_uint,
 };
 
-pub const Material = struct {
-    albedo: Vec3 = Vec3.one(),
-    albedo_map: AssetManager.Handle.Texture = .{},
-    normal_map: AssetManager.Handle.Texture = .{},
-    metallic: f32 = 0,
-    metallic_map: AssetManager.Handle.Texture = .{},
-    roughness: f32 = 1,
-    roughness_map: AssetManager.Handle.Texture = .{},
-    emission: f32 = 0,
-    emission_map: AssetManager.Handle.Texture = .{},
-};
+fn uboAlignedSizeOf(self: *const Render, comptime T: type) usize {
+    return std.mem.alignForward(usize, @sizeOf(T), self.ubo_align);
+}

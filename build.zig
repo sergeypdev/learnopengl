@@ -32,12 +32,10 @@ pub fn build(b: *Build) void {
     const assets_step = b.step("assets", "Build and install assets");
     b.getInstallStep().dependOn(assets_step);
 
-    const assetc = buildAssetCompiler(b, buildOptimize);
+    const assetc = buildAssetCompiler(b, buildOptimize, assets_mod);
 
     const install_assetc_step = b.addInstallArtifact(assetc, .{ .dest_dir = .{ .override = .prefix } });
     assets_step.dependOn(&install_assetc_step.step);
-
-    assetc.root_module.addImport("assets", assets_mod);
 
     const gen_asset_manifest = buildAssets(b, &install_assetc_step.step, assets_step, assetc, "assets") catch |err| {
         std.log.err("Failed to build assets {}\n", .{err});
@@ -205,15 +203,18 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
     return asset_manifest_file;
 }
 
-fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode) *Step.Compile {
+fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode, assets_mod: *Build.Module) *Step.Compile {
     const assimp_dep = b.dependency("zig-assimp", .{
         .target = b.host,
         .optimize = optimize,
         //.formats = @as([]const u8, "3DS,3MF,AC,AMF,ASE,Assbin,Assjson,Assxml,B3D,Blender,BVH,C4D,COB,Collada,CSM,DXF,FBX,glTF,glTF2,HMP,IFC,Irr,LWO,LWS,M3D,MD2,MD3,MD5,MDC,MDL,MMD,MS3D,NDO,NFF,Obj,OFF,Ogre,OpenGEX,Ply,Q3BSP,Q3D,Raw,SIB,SMD,Step,STEPParser,STL,Terragen,Unreal,X,X3D,XGL"),
         .formats = @as([]const u8, "Obj"),
     });
+    const zalgebra_dep = b.dependency("zalgebra", .{});
 
     const assimp_lib = assimp_dep.artifact("assimp");
+    // HACK: fix in assimp
+    assimp_lib.defineCMacro("AI_CONFIG_FBX_USE_SKELETON_BONE_CONTAINER", "\"AI_CONFIG_FBX_USE_SKELETON_BONE_CONTAINER\"");
 
     const assetc = b.addExecutable(.{
         .name = "assetc",
@@ -223,13 +224,21 @@ fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode) *Step.Compi
     });
     assetc.linkLibC();
 
-    b.installFile("libs/ispc_texcomp/lib/ispc_texcomp.dll", "ispc_texcomp.dll");
-    b.installFile("libs/ispc_texcomp/lib/ispc_texcomp.pdb", "ispc_texcomp.pdb");
+    if (b.host.result.os.tag == .windows) {
+        b.installFile("libs/ispc_texcomp/lib/ispc_texcomp.dll", "ispc_texcomp.dll");
+        b.installFile("libs/ispc_texcomp/lib/ispc_texcomp.pdb", "ispc_texcomp.pdb");
+    }
     assetc.addLibraryPath(.{ .path = "libs/ispc_texcomp/lib" });
     assetc.addIncludePath(.{ .path = "libs/ispc_texcomp/include" });
     assetc.linkSystemLibrary("ispc_texcomp");
 
-    assetc.root_module.addAnonymousImport("formats", .{ .root_source_file = .{ .path = "src/formats.zig" } });
+    const zalgebra_mod = zalgebra_dep.module("zalgebra");
+    const formats_mod = b.addModule("formats", .{ .root_source_file = .{ .path = "src/formats.zig" } });
+    formats_mod.addImport("zalgebra", zalgebra_mod);
+    formats_mod.addImport("assets", assets_mod);
+    assetc.root_module.addImport("formats", formats_mod);
+    assetc.root_module.addImport("zalgebra", zalgebra_mod);
+    assetc.root_module.addImport("assets", assets_mod);
 
     assetc.linkLibrary(assimp_lib);
     assetc.linkLibC();

@@ -1,6 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Handle = @import("assets").Handle;
+const za = @import("zalgebra");
+const Vec3 = za.Vec3;
+pub const Entity = @import("globals.zig").Entity;
 
 pub const native_endian = builtin.cpu.arch.endian();
 
@@ -229,6 +232,10 @@ pub const Texture = struct {
             .data = data,
         };
     }
+
+    pub fn free(self: *Texture, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+    }
 };
 
 // TODO: this doesn't respect endiannes at all
@@ -245,19 +252,111 @@ test "texture write/parse" {
     var data = [_]u8{ 'h', 'e', 'l', 'l', 'o' };
     const source = Texture{
         .header = .{
-            .format = .bc7_srgb,
+            .format = .bc7,
             .width = 123,
             .height = 234,
-            .mip_levels = 1,
-            .size = data.len,
+            .mip_count = 1,
         },
-        .data = &data,
+        .data = &.{&data},
     };
 
-    var buf: [@sizeOf(Texture.Header) + data.len]u8 = undefined;
+    var buf: [@sizeOf(Texture.Header) + data.len + 4]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
-    try writeTexture(stream.writer(), source);
+    try writeTexture(stream.writer(), source, native_endian);
 
-    const decoded = try Texture.fromBuffer(&buf);
+    var decoded = try Texture.fromBuffer(std.testing.allocator, &buf);
+    defer decoded.free(std.testing.allocator);
     try std.testing.expectEqualDeep(source, decoded);
 }
+
+pub const Scene = struct {
+    pub const Header = extern struct {
+        magic: [4]u8 = [_]u8{ 'S', 'C', 'N', 'F' }, // Scene Format
+        entity_count: u32 = 0,
+    };
+
+    header: Header = .{},
+
+    entities: []align(1) const Entity.Data = &.{},
+    /// Store parenting info for each entity
+    /// NOTE: Parent index should never be larger than entity index
+    /// because entities will be created in order
+    /// -1 means no parent
+    parents: []align(1) const i64 = &.{},
+
+    pub fn fromBuffer(buf: []u8) !Scene {
+        const header_ptr: *align(1) Header = @ptrCast(buf.ptr);
+        const header = header_ptr.*;
+
+        if (!std.mem.eql(u8, &header.magic, "SCNF")) {
+            return error.MagicMatch;
+        }
+
+        var offset: usize = @sizeOf(Header);
+        var size: usize = @sizeOf(Entity.Data) * header.entity_count;
+        const entities: []align(1) Entity.Data = std.mem.bytesAsSlice(Entity.Data, buf[offset .. offset + size]);
+        offset += size;
+        size = @sizeOf(i64) * header.entity_count;
+        const parents: []align(1) i64 = std.mem.bytesAsSlice(i64, buf[offset .. offset + size]);
+        offset += size;
+
+        return Scene{
+            .header = header,
+            .entities = entities,
+            .parents = parents,
+        };
+    }
+};
+
+// TODO: this doesn't respect endiannes at all
+pub fn writeScene(writer: anytype, value: Scene, endian: std.builtin.Endian) !void {
+    try writer.writeStruct(value.header);
+
+    // TODO: make writeSlice?
+    for (value.entities) |ent| {
+        try writer.writeStruct(ent);
+    }
+    for (value.parents) |parentIdx| {
+        try writer.writeInt(i64, parentIdx, endian);
+    }
+}
+
+test "write and read scene" {
+    var entities = [_]Entity.Data{
+        .{
+            .flags = .{ .point_light = true },
+            .transform = .{},
+        },
+        .{
+            .flags = .{ .point_light = true },
+            .transform = .{ .pos = Vec3.new(1, 2, 3) },
+        },
+    };
+    var parents = [_]i64{-1} ** entities.len;
+    const source = Scene{
+        .header = .{
+            .entity_count = entities.len,
+        },
+        .entities = &entities,
+        .parents = &parents,
+    };
+
+    var buf: [@sizeOf(Scene.Header) + entities.len * @sizeOf(Entity.Data) + entities.len * @sizeOf(i64)]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeScene(stream.writer(), source, native_endian);
+
+    const decoded = try Scene.fromBuffer(&buf);
+    try std.testing.expectEqualDeep(source, decoded);
+}
+
+pub const Material = extern struct {
+    albedo: Vec3 = Vec3.one(),
+    albedo_map: Handle.Texture = .{},
+    normal_map: Handle.Texture = .{},
+    metallic: f32 = 0,
+    metallic_map: Handle.Texture = .{},
+    roughness: f32 = 1,
+    roughness_map: Handle.Texture = .{},
+    emission: f32 = 0,
+    emission_map: Handle.Texture = .{},
+};

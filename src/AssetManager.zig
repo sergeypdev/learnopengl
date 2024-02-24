@@ -122,6 +122,21 @@ pub fn resolveTexture(self: *AssetManager, handle: Handle.Texture) *const Loaded
     return self.loadTexture(handle.id);
 }
 
+pub fn resolveScene(self: *AssetManager, handle: Handle.Scene) *const formats.Scene {
+    if (handle.id == 0) return &NullScene.scene;
+
+    if (self.loaded_assets.getPtr(handle.id)) |asset| {
+        switch (asset.*) {
+            .scene => |*scene| {
+                return &scene.scene;
+            },
+            else => unreachable,
+        }
+    }
+
+    return &self.loadScene(handle.id).scene;
+}
+
 // TODO: proper watching
 pub fn watchChanges(self: *AssetManager) void {
     var iter = self.loaded_assets.iterator();
@@ -256,6 +271,11 @@ const NullMesh = LoadedMesh{
 const NullTexture = LoadedTexture{
     .name = 0,
     .handle = 0,
+};
+
+const NullScene = LoadedScene{
+    .buf = "",
+    .scene = .{},
 };
 
 pub fn loadMesh(self: *AssetManager, id: AssetId) *const LoadedMesh {
@@ -425,11 +445,41 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
     return &self.loaded_assets.getPtr(id).?.texture;
 }
 
+fn loadScene(self: *AssetManager, id: AssetId) *const LoadedScene {
+    return self.loadSceneErr(id) catch |err| {
+        std.log.err("Error: {} loading scene at path {s}\n", .{ err, asset_manifest.getPath(id) });
+
+        return &NullScene;
+    };
+}
+
+fn loadSceneErr(self: *AssetManager, id: AssetId) !*const LoadedScene {
+    const path = asset_manifest.getPath(id);
+    const data = try self.loadFile(self.allocator, path, TEXTURE_MAX_BYTES);
+
+    const scene = try formats.Scene.fromBuffer(data.bytes);
+
+    try self.loaded_assets.put(
+        self.allocator,
+        id,
+        .{
+            .scene = LoadedScene{
+                .buf = data.bytes,
+                .scene = scene,
+            },
+        },
+    );
+    try self.modified_times.put(self.allocator, id, data.modified);
+
+    return &self.loaded_assets.getPtr(id).?.scene;
+}
+
 const LoadedAsset = union(enum) {
     shader: LoadedShader,
     shaderProgram: LoadedShaderProgram,
     mesh: LoadedMesh,
     texture: LoadedTexture,
+    scene: LoadedScene,
 };
 
 const LoadedShader = struct {
@@ -452,6 +502,12 @@ const LoadedMesh = struct {
 const LoadedTexture = struct {
     name: gl.GLuint,
     handle: gl.GLuint64,
+};
+
+const LoadedScene = struct {
+    // Buffer that holds scene data
+    buf: []const u8,
+    scene: formats.Scene,
 };
 
 pub const AABB = struct {
@@ -606,6 +662,9 @@ fn unloadAssetWithDependees(self: *AssetManager, id: AssetId) void {
             .texture => |*texture| {
                 gl.GL_ARB_bindless_texture.makeTextureHandleNonResidentARB(texture.handle);
                 gl.deleteTextures(1, &texture.name);
+            },
+            .scene => |*scene| {
+                self.allocator.free(scene.buf);
             },
         }
     }

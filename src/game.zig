@@ -127,6 +127,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .frame_fba = std.heap.FixedBufferAllocator.init(frame_arena_buffer),
         .assetman = AssetManager.init(global_allocator.*, globals.g_mem.frame_fba.allocator()),
         .render = Render.init(global_allocator.*, globals.g_mem.frame_fba.allocator(), &globals.g_mem.assetman),
+        .world = .{ .frame_arena = globals.g_mem.frame_fba.allocator() },
     };
     globals.g_mem.render.camera = &globals.g_mem.free_cam.camera;
     std.log.debug("actual ptr: {}, correct ptr {}", .{ globals.g_mem.assetman.frame_arena.ptr, globals.g_mem.frame_fba.allocator().ptr });
@@ -142,23 +143,29 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
     gl.viewport(0, 0, globals.g_init.width, globals.g_init.height);
 
+    const light_root = globals.g_mem.world.addEntity(.{
+        .flags = .{ .rotate = true },
+        .transform = .{ .pos = Vec3.new(0, 0.1, 0) },
+        .rotate = .{ .axis = Vec3.up(), .rate = 60 },
+    });
+
     const light1 = globals.g_mem.world.addEntity(.{
         .transform = .{ .pos = Vec3.new(1.8, 1, 0) },
         .flags = .{ .point_light = true, .rotate = true },
         .point_light = .{ .color_intensity = Vec4.new(1.0, 0.3, 0.1, 100.0), .radius = 0.1 },
-        .rotate = .{ .axis = Vec3.up(), .rate = 60 },
+        .rotate = .{ .axis = Vec3.up(), .rate = -40 },
     });
+    light1.ptr.setParent(light_root.handle);
 
-    _ = globals.g_mem.world.addEntity(.{
+    const light2 = globals.g_mem.world.addEntity(.{
         .transform = .{ .pos = Vec3.new(-2, 0, 0) },
-        .parent = light1,
         .flags = .{ .point_light = true, .rotate = true },
         .point_light = .{
             .color_intensity = Vec4.new(0.2, 0.5, 1.0, 100.0),
             .radius = 0.1,
         },
-        .rotate = .{ .axis = Vec3.up(), .rate = -20 },
     });
+    light2.ptr.setParent(light1.handle);
 
     _ = globals.g_mem.world.addEntity(.{
         .transform = .{ .pos = Vec3.new(1, 0.5, 4) },
@@ -219,6 +226,10 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
             });
         }
     }
+
+    const test_scene_root = globals.g_mem.world.createScene(globals.g_assetman.resolveScene(a.Scenes.test_scene.scene));
+
+    std.log.debug("test scene root idx {}\n", .{test_scene_root.idx});
 }
 
 export fn game_update() bool {
@@ -257,10 +268,11 @@ export fn game_update() bool {
             },
             c.SDL_KEYUP, c.SDL_KEYDOWN => {
                 const pressed = event.key.state == c.SDL_PRESSED;
+
                 switch (event.key.keysym.scancode) {
                     // Toggle fullscreen
-                    c.SDL_SCANCODE_F11 => {
-                        if (event.type == c.SDL_KEYDOWN) {
+                    c.SDL_SCANCODE_RETURN => {
+                        if (event.type == c.SDL_KEYDOWN and event.key.keysym.mod & c.KMOD_ALT > 0) {
                             toggleFullScreen() catch continue;
                         }
                     },
@@ -344,15 +356,27 @@ export fn game_update() bool {
         move.zMut().* -= 1;
     }
 
-    // TODO: make this an entity
-    gmem.free_cam.update(gmem.delta_time, move, look.scale(0.008));
-
     const f_width: f32 = @floatFromInt(ginit.width);
     const f_height: f32 = @floatFromInt(ginit.height);
 
     gmem.free_cam.camera.aspect = f_width / f_height;
     gmem.rotation += 60 * gmem.delta_time;
 
+    // TODO: make this an entity
+    gmem.free_cam.update(gmem.delta_time, move, look.scale(0.008));
+
+    // Update
+    {
+        for (gmem.world.entities[0..gmem.world.entity_count]) |*ent| {
+            if (!ent.data.flags.active) continue;
+
+            if (ent.data.flags.rotate) {
+                ent.data.transform.rotate(ent.data.rotate.axis, ent.data.rotate.rate * gmem.delta_time);
+            }
+        }
+    }
+
+    // Render
     {
         gmem.render.begin();
         defer gmem.render.finish();
@@ -364,25 +388,16 @@ export fn game_update() bool {
 
             for (0..gmem.world.entity_count) |i| {
                 const ent = &gmem.world.entities[i];
-                if (!ent.flags.active) continue;
+                if (!ent.data.flags.active) continue;
 
-                if (ent.flags.rotate) {
-                    const old_pos = ent.transform.pos;
-                    const new_pos = Mat4.fromRotation(
-                        ent.rotate.rate * gmem.delta_time,
-                        ent.rotate.axis,
-                    ).mulByVec4(Vec4.new(old_pos.x(), old_pos.y(), old_pos.z(), 1));
-                    ent.transform.setPos(Vec3.new(new_pos.x(), new_pos.y(), new_pos.z()));
-                }
-
-                if (ent.flags.point_light) {
+                if (ent.data.flags.point_light) {
                     const pos = ent.globalMatrix(&gmem.world).extractTranslation();
                     var pos4 = Vec4.new(pos.x(), pos.y(), pos.z(), 1.0);
                     pos4 = gmem.render.camera.view_mat.mulByVec4(pos4);
 
                     point_lights.lights[point_lights.count] = .{
-                        .pos_radius = Vec4.new(pos4.x(), pos4.y(), pos4.z(), ent.point_light.radius),
-                        .color_intensity = ent.point_light.color_intensity,
+                        .pos_radius = Vec4.new(pos4.x(), pos4.y(), pos4.z(), ent.data.point_light.radius),
+                        .color_intensity = ent.data.point_light.color_intensity,
                     };
                     point_lights.count += 1;
                     if (point_lights.count == Render.MAX_POINT_LIGHTS) {
@@ -390,25 +405,27 @@ export fn game_update() bool {
                     }
                 }
             }
-        }
 
-        // Render meshes and lights
-        for (0..gmem.world.entity_count) |i| {
-            const ent = &gmem.world.entities[i];
-            if (!ent.flags.active) continue;
+            gmem.render.flushUBOs();
 
-            if (ent.flags.mesh) {
-                gmem.render.draw(.{
-                    .mesh = ent.mesh.handle,
-                    .material = ent.mesh.material,
-                    .transform = ent.globalMatrix(&gmem.world).*,
-                });
-            } else if (ent.flags.point_light) {
-                gmem.render.draw(.{
-                    .mesh = a.Meshes.sphere,
-                    .material = .{ .albedo = ent.point_light.color() },
-                    .transform = ent.globalMatrix(&gmem.world).*,
-                });
+            // Render meshes and lights
+            for (0..gmem.world.entity_count) |i| {
+                const ent = &gmem.world.entities[i];
+                if (!ent.data.flags.active) continue;
+
+                if (ent.data.flags.mesh) {
+                    gmem.render.draw(.{
+                        .mesh = ent.data.mesh.handle,
+                        .material = ent.data.mesh.material,
+                        .transform = ent.globalMatrix(&gmem.world).*,
+                    });
+                } else if (ent.data.flags.point_light) {
+                    gmem.render.draw(.{
+                        .mesh = a.Meshes.sphere,
+                        .material = .{ .albedo = ent.data.point_light.color() },
+                        .transform = ent.globalMatrix(&gmem.world).*,
+                    });
+                }
             }
         }
     }

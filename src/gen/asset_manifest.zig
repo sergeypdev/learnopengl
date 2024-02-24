@@ -1,5 +1,6 @@
 pub const manifest = @import("asset_manifest_gen");
 
+pub const Scenes = manifest.Scenes;
 pub const Meshes = manifest.Meshes;
 pub const Shaders = manifest.Shaders;
 pub const ShaderPrograms = manifest.ShaderPrograms;
