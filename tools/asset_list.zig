@@ -7,8 +7,6 @@ pub const AssetListEntry = struct {
     type: AssetType,
     // original path of the source asset
     src_path: AssetPath,
-    // path of the generated processed file
-    dst_path: []const u8,
 
     pub fn getAssetId(self: *const AssetListEntry) u64 {
         return self.src_path.hash();
@@ -26,9 +24,8 @@ pub const AssetListEntry = struct {
         _ = try self.src_path.toStringSep(out_buf, std.fs.path.sep);
 
         var end = path_len;
-        if (std.mem.lastIndexOf(u8, out_buf[0..path_len], ".")) |ext_idx| {
-            end = ext_idx;
-        }
+        const ext_len = std.fs.path.extension(out_buf[0..path_len]).len;
+        end -= ext_len;
 
         // Extension
         out_buf[end] = '.';
@@ -43,8 +40,7 @@ pub fn writeAssetListEntryText(writer: anytype, entry: AssetListEntry) !void {
     try writer.writeAll(@tagName(entry.type));
     try writer.writeByte(' ');
     try entry.src_path.writeString(writer);
-    try writer.writeByte(' ');
-    try writer.writeAll(entry.dst_path);
+    try writer.writeByte('\n');
 }
 
 pub fn readAssetListEntryText(alloc: std.mem.Allocator, reader: anytype) !AssetListEntry {
@@ -55,12 +51,8 @@ pub fn readAssetListEntryText(alloc: std.mem.Allocator, reader: anytype) !AssetL
     const src_path_str = try alloc.dupe(u8, try reader.readUntilDelimiterOrEof(&buf, ' ') orelse return error.MissingSrcPath);
     const src_path = AssetPath.fromString(src_path_str);
 
-    const bytes_read = try reader.readAll(&buf);
-    const dst_path = try alloc.dupe(u8, buf[0..bytes_read]);
-
     return AssetListEntry{
         .type = asset_type,
         .src_path = src_path,
-        .dst_path = dst_path,
     };
 }

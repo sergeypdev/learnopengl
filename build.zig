@@ -188,8 +188,6 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
 
         run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
 
-        // First argument, input path relative to base assets dir
-        run_assetc.addArg(b.dupe(entry.path));
         // Absolute input file arg, this will add it to step deps, cache and all that good stuff
         run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
 

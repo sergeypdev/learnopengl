@@ -42,6 +42,13 @@ pub const AssetPath = union(enum) {
         return hasher.final();
     }
 
+    pub fn subPath(self: AssetPath, sub_path: []const u8) AssetPath {
+        return switch (self) {
+            .simple => |path| AssetPath{ .nested = .{ .path = path, .sub_path = sub_path } },
+            .nested => |nested| AssetPath{ .nested = .{ .path = nested.path, .sub_path = sub_path } },
+        };
+    }
+
     pub fn getPath(self: AssetPath) []const u8 {
         return switch (self) {
             .simple => |path| path,

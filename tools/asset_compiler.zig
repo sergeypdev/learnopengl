@@ -4,12 +4,14 @@ const types = @import("types.zig");
 const AssetType = types.AssetType;
 const AssetPath = types.AssetPath;
 const asset_list = @import("asset_list.zig");
+const AssetListEntry = asset_list.AssetListEntry;
 const Vector2 = formats.Vector2;
 const Vector3 = formats.Vector3;
 const c = @cImport({
     @cInclude("assimp/cimport.h");
     @cInclude("assimp/scene.h");
     @cInclude("assimp/mesh.h");
+    @cInclude("assimp/material.h");
     @cInclude("assimp/postprocess.h");
 
     @cInclude("stb_image.h");
@@ -38,52 +40,82 @@ pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
     const argv = std.os.argv;
-    if (argv.len < 4) {
+    if (argv.len < 3) {
         std.log.err("usage assetc <rel_path> <input> <output>\n", .{});
         return error.MissingArgs;
     }
 
-    const rel_input = std.mem.span(argv[argv.len - 3]);
     const abs_input = std.mem.span(argv[argv.len - 2]);
     const output_dir_path = std.mem.span(argv[argv.len - 1]);
+
+    // HACK: build.zig gives us a path like: zig-cache/o/<hash>/assets
+    // assetc outputs paths including the "assets/" prefix, so we do an equivalent
+    // of `cd ..` to avoid the "assets/assets/" prefix
+    const output_dirname = std.fs.path.dirname(output_dir_path) orelse return error.EmptyOutputPath;
 
     var cwd_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const cwd_path = try std.os.getcwd(&cwd_buf);
 
-    const cwd_rel_input = try std.fs.path.relative(allocator, cwd_path, abs_input);
-    const cwd_rel_output_dir = try std.fs.path.relative(allocator, cwd_path, output_dir_path);
+    const rel_input = try std.fs.path.relative(allocator, cwd_path, abs_input);
 
-    // Generated output dir
-    var output_dir = blk: {
-        var base_output_dir = try std.fs.cwd().makeOpenPath(cwd_rel_output_dir, .{});
-        defer base_output_dir.close();
-
-        break :blk try base_output_dir.makeOpenPath(std.fs.path.dirname(rel_input) orelse ".", .{});
-    };
+    var output_dir = try std.fs.cwd().makeOpenPath(output_dirname, .{});
     defer output_dir.close();
 
     const asset_type = resolveAssetTypeByExtension(abs_input) orelse return error.UnknownAssetType;
 
+    var buf_asset_list_writer = std.io.bufferedWriter(std.io.getStdOut().writer());
+    const asset_list_writer = buf_asset_list_writer.writer();
+
+    std.log.debug("rel_input: {s}", .{rel_input});
+
     switch (asset_type) {
-        .Mesh => try processMesh(allocator, abs_input, output_dir),
-        .Shader => try std.fs.Dir.copyFile(std.fs.cwd(), abs_input, output_dir, std.fs.path.basename(rel_input), .{}),
-        .ShaderProgram => try processShaderProgram(allocator, abs_input, output_dir),
-        .Texture => try processTexture(allocator, abs_input, output_dir, false),
+        .Mesh => try processMesh(allocator, rel_input, output_dir, asset_list_writer),
+        .Shader => try copyFile(asset_type, rel_input, output_dir, asset_list_writer),
+        .ShaderProgram => try processShaderProgram(allocator, rel_input, output_dir, asset_list_writer),
+        .Texture => try processTexture(allocator, rel_input, output_dir, asset_list_writer),
         .Scene => return error.NotImplemented,
     }
-
-    const out_writer = std.io.getStdOut().writer();
-
-    try asset_list.writeAssetListEntryText(out_writer, .{
-        .type = asset_type,
-        .src_path = .{ .simple = cwd_rel_input }, // TODO: remove assets prefix
-        .dst_path = cwd_rel_output_dir,
-    });
+    try buf_asset_list_writer.flush();
 }
 
-fn processMesh(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir) !void {
+fn copyFile(_type: AssetType, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
+    const asset_path = AssetPath{ .simple = input };
+
+    const asset_list_entry = AssetListEntry{
+        .type = _type,
+        .src_path = asset_path,
+    };
+
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const out_path = try asset_list_entry.getOutputPath(&buf);
+
+    try output_dir.makePath(std.fs.path.dirname(out_path) orelse ".");
+
+    try std.fs.Dir.copyFile(std.fs.cwd(), input, output_dir, out_path, .{});
+    try asset_list.writeAssetListEntryText(asset_list_writer, asset_list_entry);
+}
+
+fn createOutput(_type: AssetType, asset_path: AssetPath, output_dir: std.fs.Dir, writer: anytype) !std.fs.File {
+    const asset_list_entry = AssetListEntry{
+        .type = _type,
+        .src_path = asset_path,
+    };
+
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const out_path = try asset_list_entry.getOutputPath(&buf);
+
+    var output_subdir = try output_dir.makeOpenPath(std.fs.path.dirname(out_path) orelse ".", .{});
+    defer output_subdir.close();
+
+    try asset_list.writeAssetListEntryText(writer, asset_list_entry);
+
+    return try output_subdir.createFile(std.fs.path.basename(out_path), .{});
+}
+
+fn processMesh(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
+    const input_z = try std.mem.concatWithSentinel(allocator, u8, &.{input}, 0);
     const maybe_scene: ?*const c.aiScene = @ptrCast(c.aiImportFile(
-        input.ptr,
+        input_z.ptr,
         c.aiProcess_CalcTangentSpace | c.aiProcess_Triangulate | c.aiProcess_JoinIdenticalVertices | c.aiProcess_SortByPType | c.aiProcess_GenNormals,
     ));
     if (maybe_scene == null) {
@@ -164,9 +196,7 @@ fn processMesh(allocator: std.mem.Allocator, input: []const u8, output_dir: std.
         .indices = indices,
     };
 
-    const out_name = try changeExtensionAlloc(allocator, input, AssetType.Mesh.ext());
-
-    const out_file = try output_dir.createFile(out_name, .{});
+    var out_file = try createOutput(.Mesh, AssetPath{ .simple = input }, output_dir, asset_list_writer);
     defer out_file.close();
     var buf_writer = std.io.bufferedWriter(out_file.writer());
 
@@ -178,13 +208,7 @@ fn processMesh(allocator: std.mem.Allocator, input: []const u8, output_dir: std.
     try buf_writer.flush();
 }
 
-fn processShaderProgram(allocator: std.mem.Allocator, absolute_input: []const u8, output_dir: std.fs.Dir) !void {
-    var cwd_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const cwd_path = try std.os.getcwd(&cwd_buf);
-
-    const input = try std.fs.path.relative(allocator, cwd_path, absolute_input);
-    defer allocator.free(input);
-
+fn processShaderProgram(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
     const input_dir = std.fs.path.dirname(input).?;
 
     var file_contents: []u8 = undefined;
@@ -212,7 +236,7 @@ fn processShaderProgram(allocator: std.mem.Allocator, absolute_input: []const u8
         return error.InvalidShaderPath;
     }
 
-    const out_file = try output_dir.createFile(std.fs.path.basename(absolute_input), .{});
+    var out_file = try createOutput(.ShaderProgram, AssetPath{ .simple = input }, output_dir, asset_list_writer);
     defer out_file.close();
     var buf_writer = std.io.bufferedWriter(out_file.writer());
 
@@ -226,8 +250,8 @@ const MipLevel = struct {
     out_data: []const u8 = &.{},
 };
 
-fn processTexture(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, hdr: bool) !void {
-    _ = hdr; // autofix
+fn processTexture(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
+    const input_z = try std.mem.concatWithSentinel(allocator, u8, &.{input}, 0);
 
     // For tex.norm.png - this will be ".norm"
     const sub_ext = std.fs.path.extension(std.fs.path.stem(input));
@@ -238,7 +262,7 @@ fn processTexture(allocator: std.mem.Allocator, input: []const u8, output_dir: s
     var comps: c_int = undefined;
 
     c.stbi_set_flip_vertically_on_load(1);
-    const rgba_data_c = c.stbi_load(input.ptr, &width_int, &height_int, &comps, 4);
+    const rgba_data_c = c.stbi_load(input_z.ptr, &width_int, &height_int, &comps, 4);
     if (rgba_data_c == null) {
         return error.ImageLoadError;
     }
@@ -322,8 +346,8 @@ fn processTexture(allocator: std.mem.Allocator, input: []const u8, output_dir: s
         },
         .data = out_data,
     };
-    const out_name = try changeExtensionAlloc(allocator, input, AssetType.Texture.ext());
-    const out_file = try output_dir.createFile(out_name, .{});
+
+    const out_file = try createOutput(.Texture, AssetPath{ .simple = input }, output_dir, asset_list_writer);
     defer out_file.close();
     var buf_writer = std.io.bufferedWriter(out_file.writer());
 
