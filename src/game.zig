@@ -269,9 +269,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         }
     }
 
-    const test_scene_root = globals.g_mem.world.createScene(globals.g_assetman.resolveScene(a.Scenes.test_scene.scene));
-
-    std.log.debug("test scene root idx {}\n", .{test_scene_root.idx});
+    // const test_scene_root = globals.g_mem.world.createScene(globals.g_assetman.resolveScene(a.Scenes.test_scene.scene));
 }
 
 export fn game_update() bool {

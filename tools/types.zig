@@ -29,6 +29,7 @@ pub const AssetType = enum {
 };
 
 pub const AssetPath = union(enum) {
+    invalid: void, // translates to handle with id: 0
     simple: []const u8,
     nested: struct {
         path: []const u8,
@@ -36,6 +37,10 @@ pub const AssetPath = union(enum) {
     },
 
     pub fn hash(self: AssetPath) u64 {
+        switch (self) {
+            .invalid => return 0,
+            else => {},
+        }
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHashStrat(&hasher, self.getPath(), .Deep);
         std.hash.autoHashStrat(&hasher, self.getSubPath(), .Deep);
@@ -44,6 +49,7 @@ pub const AssetPath = union(enum) {
 
     pub fn subPath(self: AssetPath, sub_path: []const u8) AssetPath {
         return switch (self) {
+            .invalid => self,
             .simple => |path| AssetPath{ .nested = .{ .path = path, .sub_path = sub_path } },
             .nested => |nested| AssetPath{ .nested = .{ .path = nested.path, .sub_path = sub_path } },
         };
@@ -51,6 +57,7 @@ pub const AssetPath = union(enum) {
 
     pub fn getPath(self: AssetPath) []const u8 {
         return switch (self) {
+            .invalid => "",
             .simple => |path| path,
             .nested => |nested| nested.path,
         };
@@ -58,6 +65,7 @@ pub const AssetPath = union(enum) {
 
     pub fn getSubPath(self: AssetPath) ?[]const u8 {
         return switch (self) {
+            .invalid => null,
             .nested => |nested| nested.sub_path,
             else => null,
         };
@@ -65,6 +73,7 @@ pub const AssetPath = union(enum) {
 
     pub inline fn strLen(self: AssetPath) usize {
         return switch (self) {
+            .invalid => 0,
             .simple => |path| path.len,
             .nested => |nested| return nested.path.len + nested.sub_path.len + 1,
         };
@@ -72,6 +81,7 @@ pub const AssetPath = union(enum) {
 
     pub fn writeString(self: AssetPath, writer: anytype) !void {
         switch (self) {
+            .invalid => {},
             .simple => |path| {
                 try writer.writeAll(path);
             },
@@ -93,6 +103,9 @@ pub const AssetPath = union(enum) {
         }
 
         switch (self) {
+            .invalid => {
+                return out_buf[0..0];
+            },
             .simple => |path| {
                 @memcpy(out_buf[0..path.len], path);
                 return out_buf[0..path.len];
@@ -113,7 +126,10 @@ pub const AssetPath = union(enum) {
     }
 
     pub fn fromString(str: []const u8) AssetPath {
-        if (std.mem.lastIndexOf(u8, str, "#")) |sep_idx| {
+        if (str.len == 0) {
+            return .invalid;
+        }
+        if (std.mem.indexOf(u8, str, "#")) |sep_idx| {
             return .{
                 .nested = .{
                     .path = str[0..sep_idx],

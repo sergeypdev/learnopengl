@@ -150,6 +150,9 @@ const asset_extensions = [_][]const u8{
     "png",
     "jpg",
     "exr",
+    "fbx",
+    "gltf",
+    "glb",
 };
 
 // Find all assets and cook them using assetc
@@ -208,13 +211,11 @@ fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode, assets_mod:
         .target = b.host,
         .optimize = optimize,
         //.formats = @as([]const u8, "3DS,3MF,AC,AMF,ASE,Assbin,Assjson,Assxml,B3D,Blender,BVH,C4D,COB,Collada,CSM,DXF,FBX,glTF,glTF2,HMP,IFC,Irr,LWO,LWS,M3D,MD2,MD3,MD5,MDC,MDL,MMD,MS3D,NDO,NFF,Obj,OFF,Ogre,OpenGEX,Ply,Q3BSP,Q3D,Raw,SIB,SMD,Step,STEPParser,STL,Terragen,Unreal,X,X3D,XGL"),
-        .formats = @as([]const u8, "Obj"),
+        .formats = @as([]const u8, "Obj,FBX,glTF,glTF2,Blend"),
     });
     const zalgebra_dep = b.dependency("zalgebra", .{});
 
     const assimp_lib = assimp_dep.artifact("assimp");
-    // HACK: fix in assimp
-    assimp_lib.defineCMacro("AI_CONFIG_FBX_USE_SKELETON_BONE_CONTAINER", "\"AI_CONFIG_FBX_USE_SKELETON_BONE_CONTAINER\"");
 
     const assetc = b.addExecutable(.{
         .name = "assetc",

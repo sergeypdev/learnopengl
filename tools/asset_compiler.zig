@@ -9,6 +9,7 @@ const Vector2 = formats.Vector2;
 const Vector3 = formats.Vector3;
 const za = @import("zalgebra");
 const Vec3 = za.Vec3;
+const Mat4 = za.Mat4;
 const c = @cImport({
     @cInclude("assimp/cimport.h");
     @cInclude("assimp/scene.h");
@@ -23,9 +24,18 @@ const c = @cImport({
 
 const ASSET_MAX_BYTES = 1024 * 1024 * 1024;
 
+const scene_formats = [_][]const u8{
+    ".obj",
+    ".fbx",
+    ".gltf",
+    ".glb",
+};
+
 pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
-    if (std.mem.endsWith(u8, path, ".obj") or std.mem.endsWith(u8, path, ".fbx")) {
-        return .Scene;
+    for (scene_formats) |ext| {
+        if (std.mem.endsWith(u8, path, ext)) {
+            return .Scene;
+        }
     }
     if (std.mem.endsWith(u8, path, ".prog")) {
         return .ShaderProgram;
@@ -68,7 +78,7 @@ pub fn main() !void {
     var buf_asset_list_writer = std.io.bufferedWriter(std.io.getStdOut().writer());
     const asset_list_writer = buf_asset_list_writer.writer();
 
-    std.log.debug("rel_input: {s}", .{rel_input});
+    std.log.debug("type: {s}, rel_input: {s}", .{ @tagName(asset_type), rel_input });
 
     switch (asset_type) {
         .Scene => try processScene(allocator, rel_input, output_dir, asset_list_writer),
@@ -129,6 +139,12 @@ fn createOutput(_type: AssetType, asset_path: AssetPath, output_dir: std.fs.Dir,
 /// It all depends on the source asset.
 fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
     const input_z = try std.mem.concatWithSentinel(allocator, u8, &.{input}, 0);
+    const config: *c.aiPropertyStore = @as(?*c.aiPropertyStore, @ptrCast(c.aiCreatePropertyStore())) orelse return error.PropertyStore;
+    defer c.aiReleasePropertyStore(config);
+
+    // Remove point and line meshes
+    c.aiSetImportPropertyInteger(config, c.AI_CONFIG_PP_SBP_REMOVE, c.aiPrimitiveType_POINT | c.aiPrimitiveType_LINE);
+
     const maybe_scene: ?*const c.aiScene = @ptrCast(c.aiImportFile(
         input_z.ptr,
         c.aiProcess_CalcTangentSpace | c.aiProcess_Triangulate | c.aiProcess_JoinIdenticalVertices | c.aiProcess_SortByPType | c.aiProcess_GenNormals,
@@ -158,8 +174,9 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
 
         for (meshes) |mesh| {
             const name = mesh.mName.data[0..mesh.mName.length];
+            std.log.debug("mesh name {s}\n", .{name});
 
-            var output = try createOutput(.Mesh, base_asset_path.subPath(name), output_dir, asset_list_writer);
+            var output = try createOutput(.Mesh, base_asset_path.subPath(try allocator.dupe(u8, name)), output_dir, asset_list_writer);
             defer output.file.close();
 
             try mesh_outputs.append(output.list_entry);
@@ -201,21 +218,35 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
 
             const ent = &entities.items[idx];
 
-            // TODO: extract transform
+            var mat = Mat4.fromSlice(@ptrCast(&node.mTransformation));
+            mat = mat.transpose();
+            const mat_decomp = mat.decompose();
+            ent.transform.pos = mat_decomp.t;
+            ent.transform.rot = mat_decomp.r;
+            ent.transform.scale = mat_decomp.s;
 
             if (node.mMeshes != null) {
                 const mesh_indices = node.mMeshes[0..node.mNumMeshes];
-                for (mesh_indices) |mesh_idx| {
-                    const mesh_entry = mesh_outputs.items[@intCast(mesh_idx)];
-                    ent.flags.mesh = true;
-                    ent.flags.rotate = true;
+                if (mesh_indices.len == 1) {
+                    const mesh_entry = mesh_outputs.items[mesh_indices[0]];
 
-                    // TODO: turn multiple meshes into sub-entities
-                    ent.mesh = .{
-                        .handle = .{ .id = mesh_entry.src_path.hash() },
-                        // TODO: extract material
-                    };
-                    ent.rotate = .{ .axis = Vec3.up(), .rate = 80 };
+                    ent.flags.mesh = true;
+                    ent.mesh.handle = .{ .id = mesh_entry.src_path.hash() };
+                } else {
+                    for (mesh_indices) |mesh_idx| {
+                        const mesh_entry = mesh_outputs.items[@intCast(mesh_idx)];
+
+                        try entities.append(.{});
+                        const sub_idx = entities.items.len - 1;
+                        try parents.append(@intCast(idx));
+                        const sub_ent = &entities.items[sub_idx];
+
+                        sub_ent.flags.mesh = true;
+
+                        sub_ent.mesh = .{
+                            .handle = .{ .id = mesh_entry.src_path.hash() },
+                        };
+                    }
                 }
             }
         }
@@ -273,7 +304,7 @@ fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, mesh: *con
     }
 
     for (0..mesh.mNumFaces) |i| {
-        std.debug.assert(mesh.mFaces[i].mNumIndices == 3);
+        if (mesh.mFaces[i].mNumIndices != 3) continue;
         for (0..3) |j| {
             const index = mesh.mFaces[i].mIndices[j];
             if (index > std.math.maxInt(formats.Index)) {

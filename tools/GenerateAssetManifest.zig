@@ -55,7 +55,7 @@ fn make(step: *Step, prog_node: *std.Progress.Node) !void {
     // Random bytes to make WriteFile unique. Refresh this with
     // new random bytes when GenerateAssetManifest implementation is modified
     // in a non-backwards-compatible way.
-    man.hash.add(@as(u32, 0xd767ee71));
+    man.hash.add(@as(u32, 0xd767ee75));
 
     // TODO: sort generated asset lists to make sure cache is predictable
 
@@ -153,7 +153,7 @@ fn writeAssetManifest(arena: std.mem.Allocator, writer: anytype, assets: []Asset
     // TODO: think about building a perfect hashmap
     // AssetId -> Asset path mapping
     try writer.writeAll(
-        \\var buf: [4096]u8 = undefined;
+        \\var buf: [1024 * 1024]u8 = undefined;
         \\var fba = std.heap.FixedBufferAllocator.init(&buf);
         \\pub var asset_paths = std.AutoHashMapUnmanaged(u64, []const u8){};
         \\var initialized = false;
@@ -166,6 +166,7 @@ fn writeAssetManifest(arena: std.mem.Allocator, writer: anytype, assets: []Asset
     );
     for (assets) |asset_list_entry| {
         const path = try asset_list_entry.getOutputPath(&buf);
+        std.log.debug("asset output path: {s}\n", .{path});
         try std.fmt.format(writer, "    asset_paths.put(fba.allocator(), {}, \"{}\") catch @panic(\"OOM\");\n", .{ asset_list_entry.getAssetId(), std.zig.fmtEscapes(path) });
     }
     try writer.writeAll("}\n\n");
@@ -191,7 +192,6 @@ const NestedAssetDef = union(enum) {
         path: types.AssetPath,
         asset_list_entry: AssetListEntry,
     ) !void {
-        std.log.debug("NestedAssetDef.put {s}", .{path.getPath()});
         var iter = try std.fs.path.componentIterator(path.getPath());
         const filename = iter.last().?.name;
         _ = iter.first();
@@ -199,10 +199,8 @@ const NestedAssetDef = union(enum) {
         var current = &self.path;
 
         while (iter.next()) |comp| {
-            std.log.debug("NestedAssetDef comp next {s}\n", .{comp.name});
             if (comp.name.ptr == filename.ptr) break;
             const gop = try current.getOrPut(allocator, comp.name);
-            std.log.debug("NestedAssetDef put path {s}\n", .{comp.name});
             if (!gop.found_existing) {
                 gop.value_ptr.* = NestedAssetDef{ .path = .{} };
             }
@@ -216,7 +214,6 @@ const NestedAssetDef = union(enum) {
             }
             try gop.value_ptr.put(allocator, .{ .simple = sub_path }, asset_list_entry);
         } else {
-            std.log.debug("NestedAssetDef put filename {s}\n", .{std.fs.path.stem(filename)});
             try current.put(allocator, std.fs.path.stem(filename), NestedAssetDef{
                 .asset = asset_list_entry,
             });

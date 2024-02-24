@@ -20,8 +20,8 @@
             .hash = "1220483cbb42231cb056f4ea6669894c68ccd560d3af5832d6e9c84c61844bc20b7d",
         },
         .@"zig-assimp" = .{
-            .url = "https://github.com/sergeypdev/zig-assimp/tarball/64b31e9c01132352246955f496642332cb611577",
-            .hash = "1220a57ac5fe4f45eae98d9b26f7cba93dca90782d631ef73a740b0190559d424054",
+            .url = "https://github.com/sergeypdev/zig-assimp/tarball/59c2f0202bf1e5110f3eb219669f3762e3db2768",
+            .hash = "122015247b178258ee2fd9f7fbd3f8025138e8e38b5cbecdc94262974da49bd1c225",
         },
         .zalgebra = .{
             .url = "git+https://github.com/sergeypdev/zalgebra.git#232ff76712dc7cc270b6c48cedc84617536f3a59",
