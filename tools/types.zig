@@ -6,6 +6,7 @@ pub const AssetType = enum {
     Shader,
     ShaderProgram,
     Texture,
+    Material,
 
     pub fn pluralName(self: AssetType) []const u8 {
         return switch (self) {
@@ -14,6 +15,7 @@ pub const AssetType = enum {
             .Shader => "Shaders",
             .ShaderProgram => "ShaderPrograms",
             .Texture => "Textures",
+            .Material => "Materials",
         };
     }
 
@@ -24,6 +26,7 @@ pub const AssetType = enum {
             .Shader => "glsl",
             .ShaderProgram => "prog",
             .Texture => "tex",
+            .Material => "mat",
         };
     }
 };

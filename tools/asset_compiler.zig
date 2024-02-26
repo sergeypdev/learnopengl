@@ -69,8 +69,9 @@ pub fn main() !void {
     const cwd_path = try std.os.getcwd(&cwd_buf);
 
     const rel_input = try std.fs.path.relative(allocator, cwd_path, abs_input);
+    const rel_output = try std.fs.path.relative(allocator, cwd_path, output_dirname);
 
-    var output_dir = try std.fs.cwd().makeOpenPath(output_dirname, .{});
+    var output_dir = try std.fs.cwd().makeOpenPath(rel_output, .{});
     defer output_dir.close();
 
     const asset_type = resolveAssetTypeByExtension(abs_input) orelse return error.UnknownAssetType;
@@ -78,7 +79,7 @@ pub fn main() !void {
     var buf_asset_list_writer = std.io.bufferedWriter(std.io.getStdOut().writer());
     const asset_list_writer = buf_asset_list_writer.writer();
 
-    std.log.debug("type: {s}, rel_input: {s}", .{ @tagName(asset_type), rel_input });
+    std.log.debug("type: {s}, rel_input: {s}, output_dir: {s}", .{ @tagName(asset_type), rel_input, rel_output });
 
     switch (asset_type) {
         .Scene => try processScene(allocator, rel_input, output_dir, asset_list_writer),
@@ -134,16 +135,23 @@ fn createOutput(_type: AssetType, asset_path: AssetPath, output_dir: std.fs.Dir,
     };
 }
 
+const AI_MATKEY_NAME = "?mat.name";
+const AI_MATKEY_SHADING_MODEL = "$mat.shadingm";
+const AI_MATKEY_BASE_COLOR = "$clr.base";
+const AI_MATKEY_METALLIC_FACTOR = "$mat.metallicFactor";
+const AI_MATKEY_ROUGHNESS_FACTOR = "$mat.roughnessFactor";
+const AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE = c.aiTextureType_UNKNOWN;
+
 /// This can output either a single mesh (for simple formats like obj)
 /// or a scene + a bunch of sub assets (meshes, materials, textures, animations, etc.)
 /// It all depends on the source asset.
 fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
     const input_z = try std.mem.concatWithSentinel(allocator, u8, &.{input}, 0);
-    const config: *c.aiPropertyStore = @as(?*c.aiPropertyStore, @ptrCast(c.aiCreatePropertyStore())) orelse return error.PropertyStore;
-    defer c.aiReleasePropertyStore(config);
+    // const config: *c.aiPropertyStore = @as(?*c.aiPropertyStore, @ptrCast(c.aiCreatePropertyStore())) orelse return error.PropertyStore;
+    // defer c.aiReleasePropertyStore(config);
 
-    // Remove point and line meshes
-    c.aiSetImportPropertyInteger(config, c.AI_CONFIG_PP_SBP_REMOVE, c.aiPrimitiveType_POINT | c.aiPrimitiveType_LINE);
+    // // Remove point and line meshes
+    // c.aiSetImportPropertyInteger(config, c.AI_CONFIG_PP_SBP_REMOVE, c.aiPrimitiveType_POINT | c.aiPrimitiveType_LINE);
 
     const maybe_scene: ?*const c.aiScene = @ptrCast(c.aiImportFile(
         input_z.ptr,
@@ -154,7 +162,7 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
         return error.ImportFailed;
     }
     const scene = maybe_scene.?;
-    defer c.aiReleaseImport(scene);
+    // defer c.aiReleaseImport(scene);
 
     if (scene.mNumMeshes == 0) return error.NoMeshes;
 
@@ -168,20 +176,7 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
     } else {
         const base_asset_path = AssetPath{ .simple = input };
 
-        const meshes: []*c.aiMesh = @ptrCast(scene.mMeshes[0..@intCast(scene.mNumMeshes)]);
-        var mesh_outputs = try allocator.alloc(AssetListEntry, meshes.len);
-        for (meshes, 0..) |mesh, i| {
-            const name = mesh.mName.data[0..mesh.mName.length];
-            std.log.debug("mesh name {s}\n", .{name});
-
-            var output = try createOutput(.Mesh, base_asset_path.subPath(try allocator.dupe(u8, name)), output_dir, asset_list_writer);
-            defer output.file.close();
-
-            mesh_outputs[i] = output.list_entry;
-
-            try processMesh(allocator, scene, mesh, output.file);
-        }
-
+        // Embedded textures
         var texture_outputs = try allocator.alloc(AssetListEntry, @intCast(scene.mNumTextures));
         if (scene.mTextures != null) {
             const textures: []*c.aiTexture = @ptrCast(scene.mTextures[0..@intCast(scene.mNumTextures)]);
@@ -200,10 +195,83 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
                 var output = try createOutput(.Texture, base_asset_path.subPath(name), output_dir, asset_list_writer);
                 defer output.file.close();
 
-                try processTexture(allocator, name, @as([*]u8, @ptrCast(texture.pcData))[0..@intCast(texture.mWidth)], output.file);
-
                 texture_outputs[i] = output.list_entry;
+
+                try processTexture(allocator, name, @as([*]u8, @ptrCast(texture.pcData))[0..@intCast(texture.mWidth)], output.file);
             }
+        }
+
+        // Materials
+        var material_outputs = try allocator.alloc(AssetListEntry, @intCast(scene.mNumMaterials));
+        if (scene.mMaterials != null) {
+            const materials: []*c.aiMaterial = @ptrCast(scene.mMaterials[0..@intCast(scene.mNumMaterials)]);
+
+            for (materials, 0..) |material, i| {
+                var str: c.aiString = .{};
+                tryAssimp(c.aiGetMaterialString(material, AI_MATKEY_NAME, 0, 0, &str)) catch {};
+                var name: []u8 = @alignCast(str.data[0..str.length]);
+                if (name.len == 0) {
+                    name = try std.fmt.allocPrint(allocator, "material_{}", .{i + 1});
+                } else {
+                    name = try allocator.dupe(u8, name);
+                }
+
+                var output = try createOutput(.Material, base_asset_path.subPath(name), output_dir, asset_list_writer);
+                defer output.file.close();
+
+                var buf_writer = std.io.bufferedWriter(output.file.writer());
+
+                material_outputs[i] = output.list_entry;
+
+                var mat_output = formats.Material{};
+
+                var base_color: c.aiColor4D = .{};
+                try tryAssimp(c.aiGetMaterialColor(material, AI_MATKEY_BASE_COLOR, 0, 0, &base_color));
+                // TODO: rgba
+                mat_output.albedo = Vec3.new(base_color.r, base_color.g, base_color.b);
+
+                if (c.aiGetMaterialTextureCount(material, c.aiTextureType_BASE_COLOR) > 0) {
+                    const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_BASE_COLOR, 0);
+                    const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
+                    mat_output.albedo_map.id = entry.getAssetId();
+                }
+
+                try tryAssimp(c.aiGetMaterialFloat(material, AI_MATKEY_METALLIC_FACTOR, 0, 0, &mat_output.metallic));
+                if (c.aiGetMaterialTextureCount(material, c.aiTextureType_METALNESS) > 0) {
+                    const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_METALNESS, 0);
+                    const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
+                    mat_output.metallic_map.id = entry.getAssetId();
+                }
+
+                try tryAssimp(c.aiGetMaterialFloat(material, AI_MATKEY_ROUGHNESS_FACTOR, 0, 0, &mat_output.roughness));
+                if (c.aiGetMaterialTextureCount(material, c.aiTextureType_DIFFUSE_ROUGHNESS) > 0) {
+                    const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_DIFFUSE_ROUGHNESS, 0);
+                    const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
+                    mat_output.roughness_map.id = entry.getAssetId();
+                }
+
+                try formats.writeMaterial(buf_writer.writer(), mat_output);
+                try buf_writer.flush();
+            }
+        }
+
+        const MeshEntry = struct { mesh: AssetListEntry, material: AssetListEntry };
+
+        const meshes: []*c.aiMesh = @ptrCast(scene.mMeshes[0..@intCast(scene.mNumMeshes)]);
+        var mesh_outputs = try allocator.alloc(MeshEntry, meshes.len);
+        for (meshes, 0..) |mesh, i| {
+            const name = mesh.mName.data[0..mesh.mName.length];
+
+            var output = try createOutput(.Mesh, base_asset_path.subPath(try allocator.dupe(u8, name)), output_dir, asset_list_writer);
+            defer output.file.close();
+
+            if (mesh.mMaterialIndex < 0 or @as(usize, @intCast(mesh.mMaterialIndex)) > material_outputs.len) {
+                return error.InvalidMaterialIndex;
+            }
+
+            mesh_outputs[i] = .{ .mesh = output.list_entry, .material = material_outputs[@intCast(mesh.mMaterialIndex)] };
+
+            try processMesh(allocator, scene, mesh, output.file);
         }
 
         if (scene.mRootNode == null) return;
@@ -253,7 +321,8 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
                     const mesh_entry = mesh_outputs[mesh_indices[0]];
 
                     ent.flags.mesh = true;
-                    ent.mesh.handle = .{ .id = mesh_entry.src_path.hash() };
+                    ent.mesh.handle = .{ .id = mesh_entry.mesh.getAssetId() };
+                    ent.mesh.material = .{ .id = mesh_entry.material.getAssetId() };
                 } else {
                     for (mesh_indices) |mesh_idx| {
                         const mesh_entry = mesh_outputs[@intCast(mesh_idx)];
@@ -266,7 +335,8 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
                         sub_ent.flags.mesh = true;
 
                         sub_ent.mesh = .{
-                            .handle = .{ .id = mesh_entry.src_path.hash() },
+                            .handle = .{ .id = mesh_entry.mesh.getAssetId() },
+                            .material = .{ .id = mesh_entry.material.getAssetId() },
                         };
                     }
                 }
@@ -287,6 +357,67 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
         try formats.writeScene(buf_writer.writer(), out_scene, formats.native_endian);
         try buf_writer.flush();
     }
+}
+
+const AssimpTextureRef = union(enum) {
+    external: []const u8,
+    embedded: usize,
+
+    pub fn fromString(str: []const u8) !AssimpTextureRef {
+        if (str.len == 0) return error.EmptyPath;
+
+        if (str[0] == '*') {
+            const idx = try std.fmt.parseInt(usize, str[1..], 10);
+
+            return .{ .embedded = idx };
+        }
+
+        return .{ .external = str };
+    }
+
+    pub fn resolveAssetListEntry(self: AssimpTextureRef, embedded: []const AssetListEntry) AssetListEntry {
+        switch (self) {
+            .embedded => |idx| {
+                return embedded[idx];
+            },
+            .external => |path| {
+                // TODO: resolve relative to current input file
+                return AssetListEntry{ .src_path = AssetPath.fromString(path), .type = .Texture };
+            },
+        }
+    }
+};
+
+const MaterialTexture = struct {
+    path: AssimpTextureRef = .{ .external = "" },
+    mapping: c.aiTextureMapping = 0,
+    uv_index: c_uint = 0,
+    blend: f32 = 0,
+    op: c.aiTextureOp = 0,
+    map_mode: [3]c.aiTextureMapMode = .{ 0, 0, 0 },
+    flags: c_uint = 0,
+};
+fn getMaterialTexture(allocator: std.mem.Allocator, material: *c.aiMaterial, _type: c.aiTextureType, index: c_uint) !MaterialTexture {
+    var path: c.aiString = undefined;
+    var result: MaterialTexture = .{};
+
+    try tryAssimp(c.aiGetMaterialTexture(
+        material,
+        _type,
+        index,
+        &path,
+        &result.mapping,
+        &result.uv_index,
+        &result.blend,
+        &result.op,
+        &result.map_mode,
+        &result.flags,
+    ));
+
+    const path_str: []u8 = try allocator.dupe(u8, @alignCast(path.data[0..path.length]));
+    result.path = try AssimpTextureRef.fromString(path_str);
+
+    return result;
 }
 
 fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, mesh: *const c.aiMesh, out_file: std.fs.File) !void {
@@ -422,9 +553,9 @@ fn processTexture(allocator: std.mem.Allocator, input: []const u8, contents: []c
     const sub_ext = std.fs.path.extension(std.fs.path.stem(input));
     const format = if (std.mem.eql(u8, sub_ext, ".norm")) formats.Texture.Format.bc5 else formats.Texture.Format.bc7;
 
-    var width_int: c_int = undefined;
-    var height_int: c_int = undefined;
-    var comps: c_int = undefined;
+    var width_int: c_int = 0;
+    var height_int: c_int = 0;
+    var comps: c_int = 0;
 
     c.stbi_set_flip_vertically_on_load(1);
     const rgba_data_c = c.stbi_load_from_memory(contents.ptr, @intCast(contents.len), &width_int, &height_int, &comps, 4);
@@ -711,9 +842,16 @@ inline fn storeColorVec4(pixel: []u8, vec: @Vector(4, f32)) void {
     pixel[3] = @intFromFloat(out[3]);
 }
 
-fn changeExtensionAlloc(allocator: std.mem.Allocator, input: []const u8, new_ext: []const u8) ![]u8 {
-    const input_basename = std.fs.path.basename(input);
-    const ext = std.fs.path.extension(input_basename);
-    const name_without_ext = input_basename[0 .. input_basename.len - ext.len];
-    return try std.mem.concat(allocator, u8, &.{ name_without_ext, ".", new_ext });
+fn tryAssimp(code: c.aiReturn) !void {
+    switch (code) {
+        c.aiReturn_SUCCESS => {},
+        c.aiReturn_FAILURE => {
+            std.log.err("getMaterialTexture: {s}\n", .{c.aiGetErrorString()});
+            return error.AssimpError;
+        },
+        c.aiReturn_OUTOFMEMORY => {
+            return error.OutOfMemory;
+        },
+        else => unreachable,
+    }
 }

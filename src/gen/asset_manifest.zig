@@ -5,6 +5,7 @@ pub const Meshes = manifest.Meshes;
 pub const Shaders = manifest.Shaders;
 pub const ShaderPrograms = manifest.ShaderPrograms;
 pub const Textures = manifest.Textures;
+pub const Materials = manifest.Materials;
 
 pub fn getPath(asset_id: u64) []const u8 {
     manifest.init();

@@ -224,9 +224,9 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .transform = .{ .scale = Vec3.one().scale(2) },
         .mesh = .{
             .handle = a.Meshes.plane,
-            .material = .{
-                .normal_map = a.Textures.@"tile.norm",
-            },
+            // .material = .{
+            //     .normal_map = a.Textures.@"tile.norm",
+            // },
         },
     });
 
@@ -239,11 +239,11 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
                 .flags = .{ .mesh = true },
                 .mesh = .{
                     .handle = a.Meshes.bunny,
-                    .material = .{
-                        .albedo_map = a.Textures.bunny_tex1,
-                        // .normal_map = a.Textures.@"tile.norm",
-                        .roughness = @as(f32, @floatFromInt(i)) / 10.0,
-                    },
+                    // .material = .{
+                    //     .albedo_map = a.Textures.bunny_tex1,
+                    //     // .normal_map = a.Textures.@"tile.norm",
+                    //     .roughness = @as(f32, @floatFromInt(i)) / 10.0,
+                    // },
                 },
             });
         }
@@ -257,19 +257,22 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
                 .flags = .{ .mesh = true },
                 .mesh = .{
                     .handle = a.Meshes.bunny,
-                    .material = .{
-                        .albedo = Vec3.new(1.000, 0.766, 0.336),
-                        // .albedo_map = a.Textures.bunny_tex1,
-                        // .normal_map = a.Textures.@"tile.norm",
-                        .roughness = @as(f32, @floatFromInt(i + 1)) / 10.0,
-                        .metallic = 1.0,
-                    },
+                    // .material = .{
+                    //     .albedo = Vec3.new(1.000, 0.766, 0.336),
+                    //     // .albedo_map = a.Textures.bunny_tex1,
+                    //     // .normal_map = a.Textures.@"tile.norm",
+                    //     .roughness = @as(f32, @floatFromInt(i + 1)) / 10.0,
+                    //     .metallic = 1.0,
+                    // },
                 },
             });
         }
     }
 
-    // const test_scene_root = globals.g_mem.world.createScene(globals.g_assetman.resolveScene(a.Scenes.test_scene.scene));
+    const ryzen = globals.g_mem.world.createScene(globals.g_assetman.resolveScene(a.Scenes.amd_ryzen_9.scene));
+    const ent = globals.g_mem.world.getEntity(ryzen) orelse @panic("WTF");
+    ent.data.transform.pos = Vec3.new(0, 1, 0);
+    ent.data.transform.scale = Vec3.one().scale(0.2);
 }
 
 export fn game_update() bool {
@@ -456,7 +459,7 @@ export fn game_update() bool {
                 if (ent.data.flags.mesh) {
                     gmem.render.draw(.{
                         .mesh = ent.data.mesh.handle,
-                        .material = ent.data.mesh.material,
+                        .material = gmem.assetman.resolveMaterial(ent.data.mesh.material).*,
                         .transform = ent.globalMatrix(&gmem.world).*,
                     });
                 } else if (ent.data.flags.point_light) {

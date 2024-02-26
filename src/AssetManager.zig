@@ -137,6 +137,21 @@ pub fn resolveScene(self: *AssetManager, handle: Handle.Scene) *const formats.Sc
     return &self.loadScene(handle.id).scene;
 }
 
+pub fn resolveMaterial(self: *AssetManager, handle: Handle.Material) *const formats.Material {
+    if (handle.id == 0) return &NullMaterial;
+
+    if (self.loaded_assets.getPtr(handle.id)) |asset| {
+        switch (asset.*) {
+            .material => |*material| {
+                return material;
+            },
+            else => unreachable,
+        }
+    }
+
+    return self.loadMaterial(handle.id);
+}
+
 // TODO: proper watching
 pub fn watchChanges(self: *AssetManager) void {
     var iter = self.loaded_assets.iterator();
@@ -277,6 +292,8 @@ const NullScene = LoadedScene{
     .buf = "",
     .scene = .{},
 };
+
+const NullMaterial = formats.Material{};
 
 pub fn loadMesh(self: *AssetManager, id: AssetId) *const LoadedMesh {
     return self.loadMeshErr(id) catch |err| {
@@ -474,12 +491,39 @@ fn loadSceneErr(self: *AssetManager, id: AssetId) !*const LoadedScene {
     return &self.loaded_assets.getPtr(id).?.scene;
 }
 
+fn loadMaterial(self: *AssetManager, id: AssetId) *const formats.Material {
+    return self.loadMaterialErr(id) catch |err| {
+        std.log.err("Error: {} loading material at path {s}\n", .{ err, asset_manifest.getPath(id) });
+
+        return &NullMaterial;
+    };
+}
+
+fn loadMaterialErr(self: *AssetManager, id: AssetId) !*const formats.Material {
+    const path = asset_manifest.getPath(id);
+    const data = try self.loadFile(self.frame_arena, path, TEXTURE_MAX_BYTES);
+
+    const material = formats.Material.fromBuffer(data.bytes);
+
+    try self.loaded_assets.put(
+        self.allocator,
+        id,
+        .{
+            .material = material,
+        },
+    );
+    try self.modified_times.put(self.allocator, id, data.modified);
+
+    return &self.loaded_assets.getPtr(id).?.material;
+}
+
 const LoadedAsset = union(enum) {
     shader: LoadedShader,
     shaderProgram: LoadedShaderProgram,
     mesh: LoadedMesh,
     texture: LoadedTexture,
     scene: LoadedScene,
+    material: formats.Material,
 };
 
 const LoadedShader = struct {
@@ -666,6 +710,7 @@ fn unloadAssetWithDependees(self: *AssetManager, id: AssetId) void {
             .scene => |*scene| {
                 self.allocator.free(scene.buf);
             },
+            .material => {},
         }
     }
     _ = self.loaded_assets.remove(id);

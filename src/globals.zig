@@ -77,7 +77,7 @@ pub const Entity = struct {
 
     pub const Mesh = extern struct {
         handle: AssetManager.Handle.Mesh = .{},
-        material: Material = .{},
+        material: AssetManager.Handle.Material = .{},
     };
     pub const PointLight = extern struct {
         radius: f32 = std.math.floatEps(f32), // should never be 0 or bad things happen

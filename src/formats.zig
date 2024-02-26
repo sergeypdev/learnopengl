@@ -163,6 +163,11 @@ fn writeVector3(writer: anytype, value: Vector3, endian: std.builtin.Endian) !vo
     try writeFloat(writer, value.y, endian);
     try writeFloat(writer, value.z, endian);
 }
+fn writeVec3(writer: anytype, value: Vec3, endian: std.builtin.Endian) !void {
+    try writeFloat(writer, value.x(), endian);
+    try writeFloat(writer, value.y(), endian);
+    try writeFloat(writer, value.z(), endian);
+}
 
 fn writeFloat(writer: anytype, value: f32, endian: std.builtin.Endian) !void {
     const val: u32 = @bitCast(value);
@@ -350,6 +355,7 @@ test "write and read scene" {
 }
 
 pub const Material = extern struct {
+    // TODO: rgba
     albedo: Vec3 = Vec3.one(),
     albedo_map: Handle.Texture = .{},
     normal_map: Handle.Texture = .{},
@@ -359,4 +365,15 @@ pub const Material = extern struct {
     roughness_map: Handle.Texture = .{},
     emission: f32 = 0,
     emission_map: Handle.Texture = .{},
+
+    pub fn fromBuffer(buf: []const u8) Material {
+        const mat: *align(1) const Material = @ptrCast(buf);
+
+        return mat.*;
+    }
 };
+
+// TODO: doesn't respect endianness
+pub fn writeMaterial(writer: anytype, value: Material) !void {
+    try writer.writeStruct(value);
+}
