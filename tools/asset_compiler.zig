@@ -84,7 +84,7 @@ pub fn main() !void {
         .Scene => try processScene(allocator, rel_input, output_dir, asset_list_writer),
         .Shader => try copyFile(asset_type, rel_input, output_dir, asset_list_writer),
         .ShaderProgram => try processShaderProgram(allocator, rel_input, output_dir, asset_list_writer),
-        .Texture => try processTexture(allocator, rel_input, output_dir, asset_list_writer),
+        .Texture => try processTextureFromFile(allocator, rel_input, output_dir, asset_list_writer),
         else => unreachable,
     }
     try buf_asset_list_writer.flush();
@@ -169,19 +169,41 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
         const base_asset_path = AssetPath{ .simple = input };
 
         const meshes: []*c.aiMesh = @ptrCast(scene.mMeshes[0..@intCast(scene.mNumMeshes)]);
-
-        var mesh_outputs = std.ArrayList(AssetListEntry).init(allocator);
-
-        for (meshes) |mesh| {
+        var mesh_outputs = try allocator.alloc(AssetListEntry, meshes.len);
+        for (meshes, 0..) |mesh, i| {
             const name = mesh.mName.data[0..mesh.mName.length];
             std.log.debug("mesh name {s}\n", .{name});
 
             var output = try createOutput(.Mesh, base_asset_path.subPath(try allocator.dupe(u8, name)), output_dir, asset_list_writer);
             defer output.file.close();
 
-            try mesh_outputs.append(output.list_entry);
+            mesh_outputs[i] = output.list_entry;
 
             try processMesh(allocator, scene, mesh, output.file);
+        }
+
+        var texture_outputs = try allocator.alloc(AssetListEntry, @intCast(scene.mNumTextures));
+        if (scene.mTextures != null) {
+            const textures: []*c.aiTexture = @ptrCast(scene.mTextures[0..@intCast(scene.mNumTextures)]);
+
+            for (textures, 0..) |texture, i| {
+                if (texture.mHeight != 0) {
+                    std.log.debug("TODO: support loading raw textures from assimp\n", .{});
+                    return error.UnsupportedRawTexture;
+                }
+
+                var name: []u8 = @alignCast(texture.mFilename.data[0..texture.mFilename.length]);
+                if (name.len == 0) {
+                    name = try std.fmt.allocPrint(allocator, "texture_{}", .{i + 1});
+                }
+
+                var output = try createOutput(.Texture, base_asset_path.subPath(name), output_dir, asset_list_writer);
+                defer output.file.close();
+
+                try processTexture(allocator, name, @as([*]u8, @ptrCast(texture.pcData))[0..@intCast(texture.mWidth)], output.file);
+
+                texture_outputs[i] = output.list_entry;
+            }
         }
 
         if (scene.mRootNode == null) return;
@@ -228,13 +250,13 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
             if (node.mMeshes != null) {
                 const mesh_indices = node.mMeshes[0..node.mNumMeshes];
                 if (mesh_indices.len == 1) {
-                    const mesh_entry = mesh_outputs.items[mesh_indices[0]];
+                    const mesh_entry = mesh_outputs[mesh_indices[0]];
 
                     ent.flags.mesh = true;
                     ent.mesh.handle = .{ .id = mesh_entry.src_path.hash() };
                 } else {
                     for (mesh_indices) |mesh_idx| {
-                        const mesh_entry = mesh_outputs.items[@intCast(mesh_idx)];
+                        const mesh_entry = mesh_outputs[@intCast(mesh_idx)];
 
                         try entities.append(.{});
                         const sub_idx = entities.items.len - 1;
@@ -386,9 +408,16 @@ const MipLevel = struct {
     out_data: []const u8 = &.{},
 };
 
-fn processTexture(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
-    const input_z = try std.mem.concatWithSentinel(allocator, u8, &.{input}, 0);
+fn processTextureFromFile(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
+    const output = try createOutput(.Texture, AssetPath{ .simple = input }, output_dir, asset_list_writer);
+    defer output.file.close();
 
+    const contents = try std.fs.cwd().readFileAlloc(allocator, input, ASSET_MAX_BYTES);
+
+    try processTexture(allocator, input, contents, output.file);
+}
+
+fn processTexture(allocator: std.mem.Allocator, input: []const u8, contents: []const u8, out_file: std.fs.File) !void {
     // For tex.norm.png - this will be ".norm"
     const sub_ext = std.fs.path.extension(std.fs.path.stem(input));
     const format = if (std.mem.eql(u8, sub_ext, ".norm")) formats.Texture.Format.bc5 else formats.Texture.Format.bc7;
@@ -398,7 +427,7 @@ fn processTexture(allocator: std.mem.Allocator, input: []const u8, output_dir: s
     var comps: c_int = undefined;
 
     c.stbi_set_flip_vertically_on_load(1);
-    const rgba_data_c = c.stbi_load(input_z.ptr, &width_int, &height_int, &comps, 4);
+    const rgba_data_c = c.stbi_load_from_memory(contents.ptr, @intCast(contents.len), &width_int, &height_int, &comps, 4);
     if (rgba_data_c == null) {
         return error.ImageLoadError;
     }
@@ -483,9 +512,7 @@ fn processTexture(allocator: std.mem.Allocator, input: []const u8, output_dir: s
         .data = out_data,
     };
 
-    const output = try createOutput(.Texture, AssetPath{ .simple = input }, output_dir, asset_list_writer);
-    defer output.file.close();
-    var buf_writer = std.io.bufferedWriter(output.file.writer());
+    var buf_writer = std.io.bufferedWriter(out_file.writer());
 
     try formats.writeTexture(buf_writer.writer(), texture, formats.native_endian);
     try buf_writer.flush();
