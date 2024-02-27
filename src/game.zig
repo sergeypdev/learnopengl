@@ -223,10 +223,11 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .flags = .{ .mesh = true },
         .transform = .{ .scale = Vec3.one().scale(2) },
         .mesh = .{
-            .handle = a.Meshes.plane,
-            // .material = .{
-            //     .normal_map = a.Textures.@"tile.norm",
-            // },
+            .handle = a.Meshes.plane.Plane,
+            .material = .{
+                .normal_map = a.Textures.@"tile.norm",
+            },
+            .override_material = true,
         },
     });
 
@@ -238,12 +239,13 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
                 .flags = .{ .mesh = true },
                 .mesh = .{
-                    .handle = a.Meshes.bunny,
-                    // .material = .{
-                    //     .albedo_map = a.Textures.bunny_tex1,
-                    //     // .normal_map = a.Textures.@"tile.norm",
-                    //     .roughness = @as(f32, @floatFromInt(i)) / 10.0,
-                    // },
+                    .handle = a.Meshes.bunny.BunnyStanfordUVUnwrapped_res1_bun_zipper_res1,
+                    .material = .{
+                        .albedo_map = a.Textures.bunny_tex1,
+                        // .normal_map = a.Textures.@"tile.norm",
+                        .roughness = @as(f32, @floatFromInt(i)) / 10.0,
+                    },
+                    .override_material = true,
                 },
             });
         }
@@ -256,14 +258,15 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
                 .flags = .{ .mesh = true },
                 .mesh = .{
-                    .handle = a.Meshes.bunny,
-                    // .material = .{
-                    //     .albedo = Vec3.new(1.000, 0.766, 0.336),
-                    //     // .albedo_map = a.Textures.bunny_tex1,
-                    //     // .normal_map = a.Textures.@"tile.norm",
-                    //     .roughness = @as(f32, @floatFromInt(i + 1)) / 10.0,
-                    //     .metallic = 1.0,
-                    // },
+                    .handle = a.Meshes.bunny.BunnyStanfordUVUnwrapped_res1_bun_zipper_res1,
+                    .material = .{
+                        .albedo = Vec3.new(1.000, 0.766, 0.336),
+                        // .albedo_map = a.Textures.bunny_tex1,
+                        // .normal_map = a.Textures.@"tile.norm",
+                        .roughness = @as(f32, @floatFromInt(i + 1)) / 10.0,
+                        .metallic = 1.0,
+                    },
+                    .override_material = true,
                 },
             });
         }
@@ -457,15 +460,16 @@ export fn game_update() bool {
                 if (!ent.data.flags.active) continue;
 
                 if (ent.data.flags.mesh) {
+                    const mat_override: ?formats.Material = if (ent.data.mesh.override_material) ent.data.mesh.material else null;
                     gmem.render.draw(.{
                         .mesh = ent.data.mesh.handle,
-                        .material = gmem.assetman.resolveMaterial(ent.data.mesh.material).*,
+                        .material_override = mat_override,
                         .transform = ent.globalMatrix(&gmem.world).*,
                     });
                 } else if (ent.data.flags.point_light) {
                     gmem.render.draw(.{
-                        .mesh = a.Meshes.sphere,
-                        .material = .{ .albedo = ent.data.point_light.color() },
+                        .mesh = a.Meshes.sphere.Icosphere,
+                        .material_override = .{ .albedo = ent.data.point_light.color() },
                         .transform = ent.globalMatrix(&gmem.world).*,
                     });
                 }

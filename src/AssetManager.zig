@@ -281,6 +281,7 @@ const NullMesh = LoadedMesh{
         .count = 0,
         .type = gl.UNSIGNED_SHORT,
     },
+    .material = .{},
 };
 
 const NullTexture = LoadedTexture{
@@ -358,6 +359,7 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
             .min = Vec3.new(mesh.aabb.min.x, mesh.aabb.min.y, mesh.aabb.min.z),
             .max = Vec3.new(mesh.aabb.max.x, mesh.aabb.max.y, mesh.aabb.max.z),
         },
+        .material = mesh.material,
         .positions = .{
             .buffer = vertices,
             .offset = 0,
@@ -541,6 +543,7 @@ const LoadedMesh = struct {
     tangents: BufferSlice,
     uvs: BufferSlice,
     indices: IndexSlice,
+    material: formats.Material,
 };
 
 const LoadedTexture = struct {

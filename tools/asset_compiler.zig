@@ -166,213 +166,183 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
 
     if (scene.mNumMeshes == 0) return error.NoMeshes;
 
-    if (scene.mNumMeshes == 1) {
-        const mesh: *c.aiMesh = @ptrCast(scene.mMeshes[0]);
+    const base_asset_path = AssetPath{ .simple = input };
 
-        var output = try createOutput(.Mesh, AssetPath{ .simple = input }, output_dir, asset_list_writer);
-        defer output.file.close();
+    // Embedded textures
+    var texture_outputs = try allocator.alloc(TextureOutput, @intCast(scene.mNumTextures));
+    if (scene.mTextures != null) {
+        const textures: []*c.aiTexture = @ptrCast(scene.mTextures[0..@intCast(scene.mNumTextures)]);
 
-        return try processMesh(allocator, scene, mesh, output.file);
-    } else {
-        const base_asset_path = AssetPath{ .simple = input };
-
-        // Embedded textures
-        var texture_outputs = try allocator.alloc(TextureOutput, @intCast(scene.mNumTextures));
-        if (scene.mTextures != null) {
-            const textures: []*c.aiTexture = @ptrCast(scene.mTextures[0..@intCast(scene.mNumTextures)]);
-
-            for (textures, 0..) |texture, i| {
-                if (texture.mHeight != 0) {
-                    std.log.debug("TODO: support loading raw textures from assimp\n", .{});
-                    return error.UnsupportedRawTexture;
-                }
-
-                var name: []u8 = @alignCast(texture.mFilename.data[0..texture.mFilename.length]);
-                if (name.len == 0) {
-                    name = try std.fmt.allocPrint(allocator, "texture_{}", .{i + 1});
-                }
-
-                texture_outputs[i] = .{
-                    .texture = texture,
-                    .asset = try createOutput(.Texture, base_asset_path.subPath(name), output_dir, asset_list_writer),
-                };
+        for (textures, 0..) |texture, i| {
+            if (texture.mHeight != 0) {
+                std.log.debug("TODO: support loading raw textures from assimp\n", .{});
+                return error.UnsupportedRawTexture;
             }
+
+            var name: []u8 = @alignCast(texture.mFilename.data[0..texture.mFilename.length]);
+            if (name.len == 0) {
+                name = try std.fmt.allocPrint(allocator, "texture_{}", .{i + 1});
+            }
+
+            texture_outputs[i] = .{
+                .texture = texture,
+                .asset = try createOutput(.Texture, base_asset_path.subPath(name), output_dir, asset_list_writer),
+            };
         }
+    }
 
-        // Materials
-        var material_outputs = try allocator.alloc(AssetListEntry, @intCast(scene.mNumMaterials));
-        if (scene.mMaterials != null) {
-            const materials: []*c.aiMaterial = @ptrCast(scene.mMaterials[0..@intCast(scene.mNumMaterials)]);
+    // Materials
+    var material_outputs = try allocator.alloc(formats.Material, @intCast(scene.mNumMaterials));
+    if (scene.mMaterials != null) {
+        const materials: []*c.aiMaterial = @ptrCast(scene.mMaterials[0..@intCast(scene.mNumMaterials)]);
 
-            for (materials, 0..) |material, i| {
-                var str: c.aiString = .{};
-                tryAssimp(c.aiGetMaterialString(material, AI_MATKEY_NAME, 0, 0, &str)) catch {};
-                var name: []u8 = @alignCast(str.data[0..str.length]);
-                if (name.len == 0) {
-                    name = try std.fmt.allocPrint(allocator, "material_{}", .{i + 1});
-                } else {
-                    name = try allocator.dupe(u8, name);
-                }
+        for (materials, 0..) |material, i| {
+            var mat_output = formats.Material{};
 
-                var output = try createOutput(.Material, base_asset_path.subPath(name), output_dir, asset_list_writer);
-                defer output.file.close();
-
-                var buf_writer = std.io.bufferedWriter(output.file.writer());
-
-                material_outputs[i] = output.list_entry;
-
-                var mat_output = formats.Material{};
-
-                var base_color: c.aiColor4D = .{};
-                try tryAssimp(c.aiGetMaterialColor(material, AI_MATKEY_BASE_COLOR, 0, 0, &base_color));
+            var base_color: c.aiColor4D = .{};
+            if (c.aiGetMaterialColor(material, AI_MATKEY_BASE_COLOR, 0, 0, &base_color) == c.aiReturn_SUCCESS) {
                 // TODO: rgba
                 mat_output.albedo = Vec3.new(base_color.r, base_color.g, base_color.b);
-
-                if (c.aiGetMaterialTextureCount(material, c.aiTextureType_BASE_COLOR) > 0) {
-                    const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_BASE_COLOR, 0);
-                    const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
-                    mat_output.albedo_map.id = entry.getAssetId();
-                }
-
-                try tryAssimp(c.aiGetMaterialFloat(material, AI_MATKEY_METALLIC_FACTOR, 0, 0, &mat_output.metallic));
-                if (c.aiGetMaterialTextureCount(material, c.aiTextureType_METALNESS) > 0) {
-                    const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_METALNESS, 0);
-                    const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
-                    mat_output.metallic_map.id = entry.getAssetId();
-                }
-
-                try tryAssimp(c.aiGetMaterialFloat(material, AI_MATKEY_ROUGHNESS_FACTOR, 0, 0, &mat_output.roughness));
-                if (c.aiGetMaterialTextureCount(material, c.aiTextureType_DIFFUSE_ROUGHNESS) > 0) {
-                    const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_DIFFUSE_ROUGHNESS, 0);
-                    const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
-                    mat_output.roughness_map.id = entry.getAssetId();
-                }
-
-                if (c.aiGetMaterialTextureCount(material, c.aiTextureType_NORMALS) > 0) {
-                    const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_NORMALS, 0);
-                    const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
-                    switch (mat_texture.path) {
-                        .embedded => |idx| {
-                            texture_outputs[idx].tex_type = .Normal;
-                        },
-                        else => {},
-                    }
-                    mat_output.normal_map.id = entry.getAssetId();
-                }
-
-                try formats.writeMaterial(buf_writer.writer(), mat_output);
-                try buf_writer.flush();
             }
+
+            if (c.aiGetMaterialTextureCount(material, c.aiTextureType_BASE_COLOR) > 0) {
+                const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_BASE_COLOR, 0);
+                const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
+                mat_output.albedo_map.id = entry.getAssetId();
+            }
+
+            _ = c.aiGetMaterialFloat(material, AI_MATKEY_METALLIC_FACTOR, 0, 0, &mat_output.metallic);
+            if (c.aiGetMaterialTextureCount(material, c.aiTextureType_METALNESS) > 0) {
+                const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_METALNESS, 0);
+                const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
+                mat_output.metallic_map.id = entry.getAssetId();
+            }
+
+            _ = c.aiGetMaterialFloat(material, AI_MATKEY_ROUGHNESS_FACTOR, 0, 0, &mat_output.roughness);
+            if (c.aiGetMaterialTextureCount(material, c.aiTextureType_DIFFUSE_ROUGHNESS) > 0) {
+                const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_DIFFUSE_ROUGHNESS, 0);
+                const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
+                mat_output.roughness_map.id = entry.getAssetId();
+            }
+
+            if (c.aiGetMaterialTextureCount(material, c.aiTextureType_NORMALS) > 0) {
+                const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_NORMALS, 0);
+                const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
+                switch (mat_texture.path) {
+                    .embedded => |idx| {
+                        texture_outputs[idx].tex_type = .Normal;
+                    },
+                    else => {},
+                }
+                mat_output.normal_map.id = entry.getAssetId();
+            }
+            material_outputs[i] = mat_output;
         }
-
-        for (texture_outputs) |tex_out| {
-            defer tex_out.asset.file.close();
-
-            try processTexture(allocator, tex_out.tex_type, @as([*]u8, @ptrCast(tex_out.texture.pcData))[0..@intCast(tex_out.texture.mWidth)], tex_out.asset.file);
-        }
-
-        const MeshEntry = struct { mesh: AssetListEntry, material: AssetListEntry };
-
-        const meshes: []*c.aiMesh = @ptrCast(scene.mMeshes[0..@intCast(scene.mNumMeshes)]);
-        var mesh_outputs = try allocator.alloc(MeshEntry, meshes.len);
-        for (meshes, 0..) |mesh, i| {
-            const name = mesh.mName.data[0..mesh.mName.length];
-
-            var output = try createOutput(.Mesh, base_asset_path.subPath(try allocator.dupe(u8, name)), output_dir, asset_list_writer);
-            defer output.file.close();
-
-            if (mesh.mMaterialIndex < 0 or @as(usize, @intCast(mesh.mMaterialIndex)) > material_outputs.len) {
-                return error.InvalidMaterialIndex;
-            }
-
-            mesh_outputs[i] = .{ .mesh = output.list_entry, .material = material_outputs[@intCast(mesh.mMaterialIndex)] };
-
-            try processMesh(allocator, scene, mesh, output.file);
-        }
-
-        if (scene.mRootNode == null) return;
-
-        var node_to_entity_idx = std.AutoHashMap(*c.aiNode, usize).init(allocator);
-        var entities = std.ArrayList(formats.Entity.Data).init(allocator);
-        var parents = std.ArrayList(i64).init(allocator);
-
-        // Breadth first traversal
-        var nodeq = std.ArrayList(*c.aiNode).init(allocator);
-        try nodeq.append(@ptrCast(scene.mRootNode));
-
-        while (nodeq.popOrNull()) |node| {
-            if (node.mChildren != null) {
-                const children: []*c.aiNode = @ptrCast(node.mChildren[0..@intCast(node.mNumChildren)]);
-                for (0..children.len) |i| {
-                    // Reverse order, because pop taks from end of the list
-                    const child = children[children.len - i - 1];
-                    try nodeq.append(child);
-                }
-            }
-
-            try entities.append(.{});
-            const idx = entities.items.len - 1;
-            try node_to_entity_idx.put(node, idx);
-
-            const maybe_parent: ?*c.aiNode = @ptrCast(node.mParent);
-            if (maybe_parent) |parent| {
-                const parent_idx = node_to_entity_idx.get(parent) orelse return error.MissingParentIdx; // this is a bug in our code
-                try parents.append(@intCast(parent_idx));
-            } else {
-                try parents.append(-1);
-            }
-
-            const ent = &entities.items[idx];
-
-            var mat = Mat4.fromSlice(@ptrCast(&node.mTransformation));
-            mat = mat.transpose();
-            const mat_decomp = mat.decompose();
-            ent.transform.pos = mat_decomp.t;
-            ent.transform.rot = mat_decomp.r;
-            ent.transform.scale = mat_decomp.s;
-
-            if (node.mMeshes != null) {
-                const mesh_indices = node.mMeshes[0..node.mNumMeshes];
-                if (mesh_indices.len == 1) {
-                    const mesh_entry = mesh_outputs[mesh_indices[0]];
-
-                    ent.flags.mesh = true;
-                    ent.mesh.handle = .{ .id = mesh_entry.mesh.getAssetId() };
-                    ent.mesh.material = .{ .id = mesh_entry.material.getAssetId() };
-                } else {
-                    for (mesh_indices) |mesh_idx| {
-                        const mesh_entry = mesh_outputs[@intCast(mesh_idx)];
-
-                        try entities.append(.{});
-                        const sub_idx = entities.items.len - 1;
-                        try parents.append(@intCast(idx));
-                        const sub_ent = &entities.items[sub_idx];
-
-                        sub_ent.flags.mesh = true;
-
-                        sub_ent.mesh = .{
-                            .handle = .{ .id = mesh_entry.mesh.getAssetId() },
-                            .material = .{ .id = mesh_entry.material.getAssetId() },
-                        };
-                    }
-                }
-            }
-        }
-
-        const out_scene = formats.Scene{
-            .header = .{
-                .entity_count = @intCast(entities.items.len),
-            },
-            .entities = entities.items,
-            .parents = parents.items,
-        };
-
-        const output = try createOutput(.Scene, base_asset_path.subPath("scene"), output_dir, asset_list_writer);
-        defer output.file.close();
-        var buf_writer = std.io.bufferedWriter(output.file.writer());
-        try formats.writeScene(buf_writer.writer(), out_scene, formats.native_endian);
-        try buf_writer.flush();
     }
+
+    for (texture_outputs) |tex_out| {
+        defer tex_out.asset.file.close();
+
+        try processTexture(allocator, tex_out.tex_type, @as([*]u8, @ptrCast(tex_out.texture.pcData))[0..@intCast(tex_out.texture.mWidth)], tex_out.asset.file);
+    }
+
+    const meshes: []*c.aiMesh = @ptrCast(scene.mMeshes[0..@intCast(scene.mNumMeshes)]);
+    var mesh_outputs = try allocator.alloc(AssetListEntry, meshes.len);
+    for (meshes, 0..) |mesh, i| {
+        const name = mesh.mName.data[0..mesh.mName.length];
+
+        var output = try createOutput(.Mesh, base_asset_path.subPath(try allocator.dupe(u8, name)), output_dir, asset_list_writer);
+        defer output.file.close();
+
+        if (mesh.mMaterialIndex < 0 or @as(usize, @intCast(mesh.mMaterialIndex)) > material_outputs.len) {
+            return error.InvalidMaterialIndex;
+        }
+
+        mesh_outputs[i] = output.list_entry;
+
+        try processMesh(allocator, scene, material_outputs, mesh, output.file);
+    }
+
+    if (scene.mRootNode == null) return;
+
+    var node_to_entity_idx = std.AutoHashMap(*c.aiNode, usize).init(allocator);
+    var entities = std.ArrayList(formats.Entity.Data).init(allocator);
+    var parents = std.ArrayList(i64).init(allocator);
+
+    // Breadth first traversal
+    var nodeq = std.ArrayList(*c.aiNode).init(allocator);
+    try nodeq.append(@ptrCast(scene.mRootNode));
+
+    while (nodeq.popOrNull()) |node| {
+        if (node.mChildren != null) {
+            const children: []*c.aiNode = @ptrCast(node.mChildren[0..@intCast(node.mNumChildren)]);
+            for (0..children.len) |i| {
+                // Reverse order, because pop taks from end of the list
+                const child = children[children.len - i - 1];
+                try nodeq.append(child);
+            }
+        }
+
+        try entities.append(.{});
+        const idx = entities.items.len - 1;
+        try node_to_entity_idx.put(node, idx);
+
+        const maybe_parent: ?*c.aiNode = @ptrCast(node.mParent);
+        if (maybe_parent) |parent| {
+            const parent_idx = node_to_entity_idx.get(parent) orelse return error.MissingParentIdx; // this is a bug in our code
+            try parents.append(@intCast(parent_idx));
+        } else {
+            try parents.append(-1);
+        }
+
+        const ent = &entities.items[idx];
+
+        var mat = Mat4.fromSlice(@ptrCast(&node.mTransformation));
+        mat = mat.transpose();
+        const mat_decomp = mat.decompose();
+        ent.transform.pos = mat_decomp.t;
+        ent.transform.rot = mat_decomp.r;
+        ent.transform.scale = mat_decomp.s;
+
+        if (node.mMeshes != null) {
+            const mesh_indices = node.mMeshes[0..node.mNumMeshes];
+            if (mesh_indices.len == 1) {
+                const mesh_entry = mesh_outputs[mesh_indices[0]];
+
+                ent.flags.mesh = true;
+                ent.mesh.handle = .{ .id = mesh_entry.getAssetId() };
+            } else {
+                for (mesh_indices) |mesh_idx| {
+                    const mesh_entry = mesh_outputs[@intCast(mesh_idx)];
+
+                    try entities.append(.{});
+                    const sub_idx = entities.items.len - 1;
+                    try parents.append(@intCast(idx));
+                    const sub_ent = &entities.items[sub_idx];
+
+                    sub_ent.flags.mesh = true;
+
+                    sub_ent.mesh = .{
+                        .handle = .{ .id = mesh_entry.getAssetId() },
+                    };
+                }
+            }
+        }
+    }
+
+    const out_scene = formats.Scene{
+        .header = .{
+            .entity_count = @intCast(entities.items.len),
+        },
+        .entities = entities.items,
+        .parents = parents.items,
+    };
+
+    const output = try createOutput(.Scene, base_asset_path.subPath("scene"), output_dir, asset_list_writer);
+    defer output.file.close();
+    var buf_writer = std.io.bufferedWriter(output.file.writer());
+    try formats.writeScene(buf_writer.writer(), out_scene, formats.native_endian);
+    try buf_writer.flush();
 }
 
 const TextureOutput = struct {
@@ -442,7 +412,7 @@ fn getMaterialTexture(allocator: std.mem.Allocator, material: *c.aiMaterial, _ty
     return result;
 }
 
-fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, mesh: *const c.aiMesh, out_file: std.fs.File) !void {
+fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, material_outputs: []const formats.Material, mesh: *const c.aiMesh, out_file: std.fs.File) !void {
     _ = scene; // autofix
     if (mesh.mNormals == null) return error.MissingNormals;
     if (mesh.mTangents == null) return error.MissingTangents;
@@ -490,6 +460,8 @@ fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, mesh: *con
         }
     }
 
+    const material = material_outputs[@intCast(mesh.mMaterialIndex)];
+
     const out_mesh = formats.Mesh{
         .aabb = .{
             .min = formats.Vector3{
@@ -508,6 +480,7 @@ fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, mesh: *con
         .tangents = tangents,
         .uvs = uvs,
         .indices = indices,
+        .material = material,
     };
 
     var buf_writer = std.io.bufferedWriter(out_file.writer());

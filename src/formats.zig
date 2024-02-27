@@ -24,6 +24,7 @@ pub const Index = u32;
 
 pub const Mesh = struct {
     aabb: AABB,
+    material: Material,
 
     vertices: []align(1) Vector3,
     normals: []align(1) Vector3,
@@ -36,8 +37,13 @@ pub const Mesh = struct {
     pub fn fromBuffer(buffer: []u8) Mesh {
         var offset: usize = 0;
 
-        const aabb: AABB = @as(*align(1) AABB, @ptrCast(buffer[offset .. offset + @sizeOf(AABB)])).*;
-        offset += @sizeOf(AABB);
+        var size: usize = @sizeOf(AABB);
+        const aabb: AABB = @as(*align(1) AABB, @ptrCast(buffer[offset .. offset + size])).*;
+        offset += size;
+
+        size = @sizeOf(Material);
+        const material: *align(1) Material = @ptrCast(buffer[offset .. offset + size]);
+        offset += size;
 
         const vert_len = std.mem.readInt(
             usize,
@@ -53,7 +59,7 @@ pub const Mesh = struct {
         );
         offset += @sizeOf(usize);
 
-        var size = vert_len * @sizeOf(Vector3);
+        size = vert_len * @sizeOf(Vector3);
         const vertices = std.mem.bytesAsSlice(Vector3, buffer[offset .. offset + size]);
         offset += size;
         const normals = std.mem.bytesAsSlice(Vector3, buffer[offset .. offset + size]);
@@ -71,6 +77,7 @@ pub const Mesh = struct {
 
         return .{
             .aabb = aabb,
+            .material = material.*,
             .vertices = vertices,
             .normals = normals,
             .tangents = tangents,
@@ -88,6 +95,8 @@ pub fn writeMesh(writer: anytype, value: Mesh, endian: std.builtin.Endian) !void
         try writeVector3(writer, value.aabb.min, endian);
         try writeVector3(writer, value.aabb.max, endian);
     }
+
+    try writer.writeStruct(value.material);
 
     // Sizes
     try writer.writeInt(usize, value.vertices.len, endian);

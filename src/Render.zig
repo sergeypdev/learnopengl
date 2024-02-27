@@ -201,33 +201,36 @@ pub fn flushUBOs(self: *Render) void {
 }
 
 pub fn draw(self: *Render, cmd: DrawCommand) void {
+    const mesh = self.assetman.resolveMesh(cmd.mesh);
+
+    const material: Material = if (cmd.material_override) |mat| mat else mesh.material;
+
     gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&cmd.transform.data));
-    gl.uniform3fv(Uniform.Color.value(), 1, @ptrCast(&cmd.material.albedo.data));
+    gl.uniform3fv(Uniform.Color.value(), 1, @ptrCast(&material.albedo.data));
     gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
         Uniform.AlbedoMap.value(),
-        self.assetman.resolveTexture(cmd.material.albedo_map).handle,
+        self.assetman.resolveTexture(material.albedo_map).handle,
     );
     gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
         Uniform.NormalMap.value(),
-        self.assetman.resolveTexture(cmd.material.normal_map).handle,
+        self.assetman.resolveTexture(material.normal_map).handle,
     );
-    gl.uniform1fv(Uniform.Metallic.value(), 1, &cmd.material.metallic);
+    gl.uniform1fv(Uniform.Metallic.value(), 1, &material.metallic);
     gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
         Uniform.MetallicMap.value(),
-        self.assetman.resolveTexture(cmd.material.metallic_map).handle,
+        self.assetman.resolveTexture(material.metallic_map).handle,
     );
-    gl.uniform1fv(Uniform.Roughness.value(), 1, &cmd.material.roughness);
+    gl.uniform1fv(Uniform.Roughness.value(), 1, &material.roughness);
     gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
         Uniform.RoughnessMap.value(),
-        self.assetman.resolveTexture(cmd.material.roughness_map).handle,
+        self.assetman.resolveTexture(material.roughness_map).handle,
     );
-    gl.uniform1fv(Uniform.Emission.value(), 1, &cmd.material.emission);
+    gl.uniform1fv(Uniform.Emission.value(), 1, &material.emission);
     gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
         Uniform.EmissionMap.value(),
-        self.assetman.resolveTexture(cmd.material.emission_map).handle,
+        self.assetman.resolveTexture(material.emission_map).handle,
     );
 
-    const mesh = self.assetman.resolveMesh(cmd.mesh);
     mesh.positions.bind(Render.Attrib.Position.value());
     mesh.normals.bind(Render.Attrib.Normal.value());
     mesh.tangents.bind(Render.Attrib.Tangent.value());
@@ -276,7 +279,7 @@ pub fn checkGLError() void {
 
 pub const DrawCommand = struct {
     mesh: AssetManager.Handle.Mesh,
-    material: Material,
+    material_override: ?Material,
     transform: Mat4,
 };
 
