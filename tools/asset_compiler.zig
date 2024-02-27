@@ -177,7 +177,7 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
         const base_asset_path = AssetPath{ .simple = input };
 
         // Embedded textures
-        var texture_outputs = try allocator.alloc(AssetListEntry, @intCast(scene.mNumTextures));
+        var texture_outputs = try allocator.alloc(TextureOutput, @intCast(scene.mNumTextures));
         if (scene.mTextures != null) {
             const textures: []*c.aiTexture = @ptrCast(scene.mTextures[0..@intCast(scene.mNumTextures)]);
 
@@ -192,12 +192,10 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
                     name = try std.fmt.allocPrint(allocator, "texture_{}", .{i + 1});
                 }
 
-                var output = try createOutput(.Texture, base_asset_path.subPath(name), output_dir, asset_list_writer);
-                defer output.file.close();
-
-                texture_outputs[i] = output.list_entry;
-
-                try processTexture(allocator, name, @as([*]u8, @ptrCast(texture.pcData))[0..@intCast(texture.mWidth)], output.file);
+                texture_outputs[i] = .{
+                    .texture = texture,
+                    .asset = try createOutput(.Texture, base_asset_path.subPath(name), output_dir, asset_list_writer),
+                };
             }
         }
 
@@ -250,9 +248,27 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
                     mat_output.roughness_map.id = entry.getAssetId();
                 }
 
+                if (c.aiGetMaterialTextureCount(material, c.aiTextureType_NORMALS) > 0) {
+                    const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_NORMALS, 0);
+                    const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
+                    switch (mat_texture.path) {
+                        .embedded => |idx| {
+                            texture_outputs[idx].tex_type = .Normal;
+                        },
+                        else => {},
+                    }
+                    mat_output.normal_map.id = entry.getAssetId();
+                }
+
                 try formats.writeMaterial(buf_writer.writer(), mat_output);
                 try buf_writer.flush();
             }
+        }
+
+        for (texture_outputs) |tex_out| {
+            defer tex_out.asset.file.close();
+
+            try processTexture(allocator, tex_out.tex_type, @as([*]u8, @ptrCast(tex_out.texture.pcData))[0..@intCast(tex_out.texture.mWidth)], tex_out.asset.file);
         }
 
         const MeshEntry = struct { mesh: AssetListEntry, material: AssetListEntry };
@@ -359,6 +375,12 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
     }
 }
 
+const TextureOutput = struct {
+    texture: *c.aiTexture,
+    asset: AssetOutput,
+    tex_type: TextureType = .Color,
+};
+
 const AssimpTextureRef = union(enum) {
     external: []const u8,
     embedded: usize,
@@ -375,10 +397,10 @@ const AssimpTextureRef = union(enum) {
         return .{ .external = str };
     }
 
-    pub fn resolveAssetListEntry(self: AssimpTextureRef, embedded: []const AssetListEntry) AssetListEntry {
+    pub fn resolveAssetListEntry(self: AssimpTextureRef, embedded: []const TextureOutput) AssetListEntry {
         switch (self) {
             .embedded => |idx| {
-                return embedded[idx];
+                return embedded[idx].asset.list_entry;
             },
             .external => |path| {
                 // TODO: resolve relative to current input file
@@ -544,15 +566,29 @@ fn processTextureFromFile(allocator: std.mem.Allocator, input: []const u8, outpu
     defer output.file.close();
 
     const contents = try std.fs.cwd().readFileAlloc(allocator, input, ASSET_MAX_BYTES);
+    const texture_type = guessTextureTypeFromName(input);
 
-    try processTexture(allocator, input, contents, output.file);
+    try processTexture(allocator, texture_type, contents, output.file);
 }
 
-fn processTexture(allocator: std.mem.Allocator, input: []const u8, contents: []const u8, out_file: std.fs.File) !void {
-    // For tex.norm.png - this will be ".norm"
-    const sub_ext = std.fs.path.extension(std.fs.path.stem(input));
-    const format = if (std.mem.eql(u8, sub_ext, ".norm")) formats.Texture.Format.bc5 else formats.Texture.Format.bc7;
+/// Using naming conventions
+fn guessTextureTypeFromName(name: []const u8) TextureType {
+    const sub_ext = std.fs.path.extension(std.fs.path.stem(name));
+    if (std.mem.eql(u8, sub_ext, ".norm")) {
+        return .Normal;
+    }
 
+    return .Color;
+}
+
+const TextureType = enum {
+    Color,
+    Normal,
+    HDR,
+};
+
+fn processTexture(allocator: std.mem.Allocator, texture_type: TextureType, contents: []const u8, out_file: std.fs.File) !void {
+    const format = if (texture_type == .Normal) formats.Texture.Format.bc5 else formats.Texture.Format.bc7;
     var width_int: c_int = 0;
     var height_int: c_int = 0;
     var comps: c_int = 0;
