@@ -15,6 +15,7 @@ layout(std140, binding = 0) uniform Matrices {
   mat4 view;
 };
 
+// TODO: rename
 layout(std140, binding = 1) uniform Lights {
   Light lights[MAX_POINT_LIGHTS];
   uint lights_count;
@@ -25,17 +26,22 @@ layout(location = 1) uniform mat4 model;
 
 layout(location = 2) uniform vec3 color;
 layout(location = 3, bindless_sampler) uniform sampler2D albedo_map;
+layout(location = 4) uniform vec2 albedo_map_uv_scale = vec2(1);
 
-layout(location = 4, bindless_sampler) uniform sampler2D normal_map;
+layout(location = 5, bindless_sampler) uniform sampler2D normal_map;
+layout(location = 6) uniform vec2 normal_map_uv_scale = vec2(1);
 
-layout(location = 5) uniform float metallic;
-layout(location = 6, bindless_sampler) uniform sampler2D metallic_map;
+layout(location = 7) uniform float metallic;
+layout(location = 8, bindless_sampler) uniform sampler2D metallic_map;
+layout(location = 9) uniform vec2 metallic_map_uv_scale = vec2(1);
 
-layout(location = 7) uniform float roughness;
-layout(location = 8, bindless_sampler) uniform sampler2D roughness_map;
+layout(location = 10) uniform float roughness;
+layout(location = 11, bindless_sampler) uniform sampler2D roughness_map;
+layout(location = 12) uniform vec2 roughness_map_uv_scale = vec2(1);
 
-layout(location = 9) uniform vec3 emission;
-layout(location = 10, bindless_sampler) uniform sampler2D emission_map;
+layout(location = 13) uniform vec3 emission;
+layout(location = 14, bindless_sampler) uniform sampler2D emission_map;
+layout(location = 15) uniform vec2 emission_map_uv_scale = vec2(1);
 
 
 // Input, output blocks
@@ -80,11 +86,11 @@ struct Material {
 
 Material evalMaterial() {
   Material result;
-  result.albedo = textureSize(albedo_map, 0) == ivec2(0) ? pow(color, vec3(2.2)) : texture(albedo_map, VertexOut.uv).rgb;
-  float fMetallic = textureSize(metallic_map, 0) == ivec2(0) ? metallic : texture(metallic_map, VertexOut.uv).b;
-  result.metallic = fMetallic > 0.5;
-  result.roughness = max(0.01, textureSize(roughness_map, 0) == ivec2(0) ? roughness : texture(roughness_map, VertexOut.uv).g);
-  result.emission = textureSize(emission_map, 0) == ivec2(0) ? emission : texture(emission_map, VertexOut.uv).rgb;
+  result.albedo = textureSize(albedo_map, 0) == ivec2(0) ? pow(color, vec3(2.2)) : texture(albedo_map, VertexOut.uv * albedo_map_uv_scale).rgb;
+  float fMetallic = textureSize(metallic_map, 0) == ivec2(0) ? metallic : texture(metallic_map, VertexOut.uv * metallic_map_uv_scale).b;
+  result.metallic = fMetallic > 0.1;
+  result.roughness = max(0.01, textureSize(roughness_map, 0) == ivec2(0) ? roughness : texture(roughness_map, VertexOut.uv * roughness_map_uv_scale).g);
+  result.emission = textureSize(emission_map, 0) == ivec2(0) ? emission : texture(emission_map, VertexOut.uv * emission_map_uv_scale).rgb;
 
   return result;
 }
@@ -110,8 +116,8 @@ float ggxDistribution(Material mat, float NDotH) {
   return alpha2 / (PI * d * d);
 }
 
-float lightAttenuation(float dist, float radius) {
-  float d = max(dist - radius, 0);
+float lightAttenuation(float point, float dist, float radius) {
+  float d = max(dist - radius, 0) * point;
 
   float denom = d/radius + 1;
   float att = 1 / (denom * denom);
@@ -128,13 +134,22 @@ vec3 microfacetModel(Material mat, Light light, vec3 P, vec3 N) {
     diffuseBrdf = mat.albedo;
   }
 
-  vec3 lightI = light.color.rgb * light.color.a;
-  float lightRadius = light.vPos.w;
-  vec3 L = light.vPos.xyz - P;
+  // 0 - means directional, 1 - means point light
+  float point = light.vPos.w;
+  vec3 lightI = light.color.rgb;
+  float lightRadius = light.color.a;
+  vec3 L = mix(-light.vPos.xyz, light.vPos.xyz - P, light.vPos.w);
   float dist = length(L);
   L /= dist;
 
-  float att = lightAttenuation(dist, lightRadius);
+  // TODO: I think this is uniform control flow
+  // so makes sense to use `if` there for directional/point
+  // and don't calculate attenuation for directional at all
+  float att = lightAttenuation(
+    point,
+    dist,
+    lightRadius
+  );
   lightI *= att;
 
   vec3 V = normalize(-P);
@@ -153,7 +168,7 @@ vec3 microfacetModel(Material mat, Light light, vec3 P, vec3 N) {
 void main() {
   Material material = evalMaterial();
   
-  vec3 N = textureSize(normal_map, 0) == ivec2(0) ? vec3(0.5) : vec3(texture(normal_map, VertexOut.uv).xy, 0);
+  vec3 N = textureSize(normal_map, 0) == ivec2(0) ? vec3(0.5) : vec3(texture(normal_map, VertexOut.uv * normal_map_uv_scale).xy, 0);
   N = N * 2.0 - 1.0;
   N.z = sqrt(clamp(1 - N.x * N.x - N.y * N.y, 0, 1));
   N = normalize(N);

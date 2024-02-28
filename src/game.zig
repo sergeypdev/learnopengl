@@ -113,7 +113,7 @@ fn loadGL() void {
         @panic("gl.load");
     };
     gl.debugMessageCallback(glDebugCallback, null);
-    gl.enable(gl.DEBUG_OUTPUT);
+    //gl.enable(gl.DEBUG_OUTPUT);
 }
 
 fn glDebugCallback(source: gl.GLenum, _type: gl.GLenum, id: gl.GLuint, severity: gl.GLenum, length: gl.GLsizei, message: [*:0]const u8, userParam: ?*anyopaque) callconv(.C) void {
@@ -185,6 +185,12 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
     gl.viewport(0, 0, globals.g_init.width, globals.g_init.height);
 
+    _ = globals.g_mem.world.addEntity(.{
+        .flags = .{ .dir_light = true },
+        .transform = .{ .rot = Quat.fromEulerAngles(Vec3.new(60, 15, 0)) },
+        .light = .{ .color_intensity = Vec4.new(1, 1, 0.83, 1) },
+    });
+
     const light_root = globals.g_mem.world.addEntity(.{
         .flags = .{ .rotate = true },
         .transform = .{ .pos = Vec3.new(0, 0.1, 0) },
@@ -194,7 +200,8 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     const light1 = globals.g_mem.world.addEntity(.{
         .transform = .{ .pos = Vec3.new(1.8, 1, 0) },
         .flags = .{ .point_light = true, .rotate = true },
-        .point_light = .{ .color_intensity = Vec4.new(1.0, 0.3, 0.1, 100.0), .radius = 0.1 },
+        .light = .{ .color_intensity = Vec4.new(1.0, 0.3, 0.1, 100.0) },
+        .point_light = .{ .radius = 0.1 },
         .rotate = .{ .axis = Vec3.up(), .rate = -40 },
     });
     light1.ptr.setParent(light_root.handle);
@@ -202,20 +209,16 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     const light2 = globals.g_mem.world.addEntity(.{
         .transform = .{ .pos = Vec3.new(-2, 0, 0) },
         .flags = .{ .point_light = true, .rotate = true },
-        .point_light = .{
-            .color_intensity = Vec4.new(0.2, 0.5, 1.0, 100.0),
-            .radius = 0.1,
-        },
+        .light = .{ .color_intensity = Vec4.new(0.2, 0.5, 1.0, 100.0) },
+        .point_light = .{ .radius = 0.1 },
     });
     light2.ptr.setParent(light1.handle);
 
     _ = globals.g_mem.world.addEntity(.{
         .transform = .{ .pos = Vec3.new(1, 0.5, 4) },
         .flags = .{ .point_light = true },
-        .point_light = .{
-            .color_intensity = Vec4.new(0.2, 0.5, 1.0, 10.0),
-            .radius = 1,
-        },
+        .light = .{ .color_intensity = Vec4.new(0.2, 0.5, 1.0, 10.0) },
+        .point_light = .{ .radius = 1 },
     });
 
     // Plane
@@ -441,9 +444,23 @@ export fn game_update() bool {
                     var pos4 = Vec4.new(pos.x(), pos.y(), pos.z(), 1.0);
                     pos4 = gmem.render.camera.view_mat.mulByVec4(pos4);
 
+                    const color = ent.data.light.premultipliedColor();
                     point_lights.lights[point_lights.count] = .{
-                        .pos_radius = Vec4.new(pos4.x(), pos4.y(), pos4.z(), ent.data.point_light.radius),
-                        .color_intensity = ent.data.point_light.color_intensity,
+                        .pos = Vec4.new(pos4.x(), pos4.y(), pos4.z(), 1),
+                        .color_radius = Vec4.new(color.x(), color.y(), color.z(), ent.data.point_light.radius),
+                    };
+                    point_lights.count += 1;
+                    if (point_lights.count == Render.MAX_POINT_LIGHTS) {
+                        break;
+                    }
+                }
+                if (ent.data.flags.dir_light) {
+                    var dir4 = ent.globalMatrix(&gmem.world).mulByVec4(Vec4.forward());
+                    dir4 = gmem.render.camera.view_mat.mulByVec4(dir4);
+                    const color = ent.data.light.premultipliedColor();
+                    point_lights.lights[point_lights.count] = .{
+                        .pos = dir4,
+                        .color_radius = Vec4.new(color.x(), color.y(), color.z(), 1),
                     };
                     point_lights.count += 1;
                     if (point_lights.count == Render.MAX_POINT_LIGHTS) {
@@ -469,7 +486,7 @@ export fn game_update() bool {
                 } else if (ent.data.flags.point_light) {
                     gmem.render.draw(.{
                         .mesh = a.Meshes.sphere.Icosphere,
-                        .material_override = .{ .albedo = ent.data.point_light.color() },
+                        .material_override = .{ .albedo = ent.data.light.premultipliedColor() },
                         .transform = ent.globalMatrix(&gmem.world).*,
                     });
                 }

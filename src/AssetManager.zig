@@ -22,6 +22,7 @@ const asset_manifest = @import("asset_manifest");
 const assets = @import("assets");
 const checkGLError = @import("Render.zig").checkGLError;
 // const basisu = @import("mach-basisu");
+const Vec2 = @import("zalgebra").Vec2;
 const Vec3 = @import("zalgebra").Vec3;
 
 pub const AssetId = assets.AssetId;
@@ -67,22 +68,22 @@ pub fn deinit(self: *AssetManager) void {
     self.loaded_assets.deinit(self.allocator);
 }
 
-pub fn resolveShader(self: *AssetManager, handle: Handle.Shader) *const LoadedShader {
-    if (handle.id == 0) return &NullShader;
+pub fn resolveShader(self: *AssetManager, handle: Handle.Shader) LoadedShader {
+    if (handle.id == 0) return NullShader;
 
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
-        return &asset.shader;
+        return asset.shader;
     }
 
     return self.loadShader(handle.id);
 }
 
-pub fn resolveShaderProgram(self: *AssetManager, handle: Handle.ShaderProgram) *const LoadedShaderProgram {
-    if (handle.id == 0) return &NullShaderProgram;
+pub fn resolveShaderProgram(self: *AssetManager, handle: Handle.ShaderProgram) LoadedShaderProgram {
+    if (handle.id == 0) return NullShaderProgram;
 
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
         switch (asset.*) {
-            .shaderProgram => |*shader| {
+            .shaderProgram => |shader| {
                 return shader;
             },
             else => unreachable,
@@ -92,12 +93,12 @@ pub fn resolveShaderProgram(self: *AssetManager, handle: Handle.ShaderProgram) *
     return self.loadShaderProgram(handle);
 }
 
-pub fn resolveMesh(self: *AssetManager, handle: Handle.Mesh) *const LoadedMesh {
-    if (handle.id == 0) return &NullMesh;
+pub fn resolveMesh(self: *AssetManager, handle: Handle.Mesh) LoadedMesh {
+    if (handle.id == 0) return NullMesh;
 
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
         switch (asset.*) {
-            .mesh => |*mesh| {
+            .mesh => |mesh| {
                 return mesh;
             },
             else => unreachable,
@@ -107,12 +108,12 @@ pub fn resolveMesh(self: *AssetManager, handle: Handle.Mesh) *const LoadedMesh {
     return self.loadMesh(handle.id);
 }
 
-pub fn resolveTexture(self: *AssetManager, handle: Handle.Texture) *const LoadedTexture {
-    if (handle.id == 0) return &NullTexture;
+pub fn resolveTexture(self: *AssetManager, handle: Handle.Texture) LoadedTexture {
+    if (handle.id == 0) return NullTexture;
 
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
         switch (asset.*) {
-            .texture => |*texture| {
+            .texture => |texture| {
                 return texture;
             },
             else => unreachable,
@@ -122,27 +123,27 @@ pub fn resolveTexture(self: *AssetManager, handle: Handle.Texture) *const Loaded
     return self.loadTexture(handle.id);
 }
 
-pub fn resolveScene(self: *AssetManager, handle: Handle.Scene) *const formats.Scene {
-    if (handle.id == 0) return &NullScene.scene;
+pub fn resolveScene(self: *AssetManager, handle: Handle.Scene) formats.Scene {
+    if (handle.id == 0) return NullScene.scene;
 
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
         switch (asset.*) {
-            .scene => |*scene| {
-                return &scene.scene;
+            .scene => |scene| {
+                return scene.scene;
             },
             else => unreachable,
         }
     }
 
-    return &self.loadScene(handle.id).scene;
+    return self.loadScene(handle.id).scene;
 }
 
-pub fn resolveMaterial(self: *AssetManager, handle: Handle.Material) *const formats.Material {
-    if (handle.id == 0) return &NullMaterial;
+pub fn resolveMaterial(self: *AssetManager, handle: Handle.Material) formats.Material {
+    if (handle.id == 0) return NullMaterial;
 
     if (self.loaded_assets.getPtr(handle.id)) |asset| {
         switch (asset.*) {
-            .material => |*material| {
+            .material => |material| {
                 return material;
             },
             else => unreachable,
@@ -181,15 +182,15 @@ pub const ShaderProgramDefinition = struct {
     fragment: []const u8,
 };
 
-pub fn loadShaderProgram(self: *AssetManager, handle: Handle.ShaderProgram) *const LoadedShaderProgram {
+pub fn loadShaderProgram(self: *AssetManager, handle: Handle.ShaderProgram) LoadedShaderProgram {
     return self.loadShaderProgramErr(handle.id) catch |err| {
         std.log.err("Failed to load shader program {}\n", .{err});
 
-        return &NullShaderProgram;
+        return NullShaderProgram;
     };
 }
 
-fn loadShaderProgramErr(self: *AssetManager, id: AssetId) !*LoadedShaderProgram {
+fn loadShaderProgramErr(self: *AssetManager, id: AssetId) !LoadedShaderProgram {
     const data = try self.loadFile(self.frame_arena, asset_manifest.getPath(id), SHADER_MAX_BYTES);
     const program = formats.ShaderProgram.fromBuffer(data.bytes);
 
@@ -237,12 +238,15 @@ fn loadShaderProgramErr(self: *AssetManager, id: AssetId) !*LoadedShaderProgram 
         return error.ProgramLinkFailed;
     }
 
+    const loaded_shader_program = LoadedShaderProgram{
+        .program = prog,
+    };
     try self.loaded_assets.put(self.allocator, id, .{
-        .shaderProgram = .{ .program = prog },
+        .shaderProgram = loaded_shader_program,
     });
     try self.modified_times.put(self.allocator, id, data.modified);
 
-    return &self.loaded_assets.getPtr(id).?.shaderProgram;
+    return loaded_shader_program;
 }
 
 const NullShader = LoadedShader{
@@ -296,16 +300,17 @@ const NullScene = LoadedScene{
 
 const NullMaterial = formats.Material{};
 
-pub fn loadMesh(self: *AssetManager, id: AssetId) *const LoadedMesh {
+pub fn loadMesh(self: *AssetManager, id: AssetId) LoadedMesh {
     return self.loadMeshErr(id) catch |err| {
         std.log.err("Error: {} loading mesh at path: {s}", .{ err, asset_manifest.getPath(id) });
-        return &NullMesh;
+        return NullMesh;
     };
 }
 
-fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
+fn loadMeshErr(self: *AssetManager, id: AssetId) !LoadedMesh {
     const path = asset_manifest.getPath(id);
     const data = try self.loadFile(self.frame_arena, path, MESH_MAX_BYTES);
+    defer self.frame_arena.free(data.bytes);
     const mesh = formats.Mesh.fromBuffer(data.bytes);
 
     var bufs = [_]gl.GLuint{ 0, 0, 0, 0, 0 };
@@ -390,20 +395,21 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !*const LoadedMesh {
 
     try self.loaded_assets.put(self.allocator, id, .{ .mesh = loaded_mesh });
     try self.modified_times.put(self.allocator, id, data.modified);
-    return &self.loaded_assets.getPtr(id).?.mesh;
+    return loaded_mesh;
 }
 
-fn loadTexture(self: *AssetManager, id: AssetId) *const LoadedTexture {
+fn loadTexture(self: *AssetManager, id: AssetId) LoadedTexture {
     return self.loadTextureErr(id) catch |err| {
         std.log.err("Error: {} loading texture at path {s}\n", .{ err, asset_manifest.getPath(id) });
 
-        return &NullTexture;
+        return NullTexture;
     };
 }
 
-fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
+fn loadTextureErr(self: *AssetManager, id: AssetId) !LoadedTexture {
     const path = asset_manifest.getPath(id);
     const data = try self.loadFile(self.frame_arena, path, TEXTURE_MAX_BYTES);
+    defer self.frame_arena.free(data.bytes);
 
     const texture = try formats.Texture.fromBuffer(self.frame_arena, data.bytes);
 
@@ -424,8 +430,8 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
         name,
         @intCast(texture.mipLevels()),
         gl_format,
-        @intCast(texture.header.width),
-        @intCast(texture.header.height),
+        @intCast(texture.header.padded_width),
+        @intCast(texture.header.padded_height),
     );
     checkGLError();
 
@@ -445,63 +451,69 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !*const LoadedTexture {
         checkGLError();
     }
 
+    const uv_scale = Vec2.new(
+        @as(f32, @floatFromInt(texture.header.width)) / @as(f32, @floatFromInt(texture.header.padded_width)),
+        @as(f32, @floatFromInt(texture.header.height)) / @as(f32, @floatFromInt(texture.header.padded_height)),
+    );
+
     const handle = gl.GL_ARB_bindless_texture.getTextureHandleARB(name);
     gl.GL_ARB_bindless_texture.makeTextureHandleResidentARB(handle);
     errdefer gl.GL_ARB_bindless_texture.makeTextureHandleNonResidentARB(handle);
 
+    const loaded_texture = LoadedTexture{
+        .name = name,
+        .handle = handle,
+        .uv_scale = uv_scale,
+    };
     try self.loaded_assets.put(
         self.allocator,
         id,
-        .{
-            .texture = LoadedTexture{
-                .name = name,
-                .handle = handle,
-            },
-        },
+        .{ .texture = loaded_texture },
     );
     try self.modified_times.put(self.allocator, id, data.modified);
 
-    return &self.loaded_assets.getPtr(id).?.texture;
+    return loaded_texture;
 }
 
-fn loadScene(self: *AssetManager, id: AssetId) *const LoadedScene {
+fn loadScene(self: *AssetManager, id: AssetId) LoadedScene {
     return self.loadSceneErr(id) catch |err| {
         std.log.err("Error: {} loading scene at path {s}\n", .{ err, asset_manifest.getPath(id) });
 
-        return &NullScene;
+        return NullScene;
     };
 }
 
-fn loadSceneErr(self: *AssetManager, id: AssetId) !*const LoadedScene {
+fn loadSceneErr(self: *AssetManager, id: AssetId) !LoadedScene {
     const path = asset_manifest.getPath(id);
     const data = try self.loadFile(self.allocator, path, TEXTURE_MAX_BYTES);
 
     const scene = try formats.Scene.fromBuffer(data.bytes);
+    const loaded_scene = LoadedScene{
+        .buf = data.bytes,
+        .scene = scene,
+    };
 
     try self.loaded_assets.put(
         self.allocator,
         id,
         .{
-            .scene = LoadedScene{
-                .buf = data.bytes,
-                .scene = scene,
-            },
+            .scene = loaded_scene,
         },
     );
     try self.modified_times.put(self.allocator, id, data.modified);
 
-    return &self.loaded_assets.getPtr(id).?.scene;
+    return loaded_scene;
 }
 
-fn loadMaterial(self: *AssetManager, id: AssetId) *const formats.Material {
+fn loadMaterial(self: *AssetManager, id: AssetId) formats.Material {
     return self.loadMaterialErr(id) catch |err| {
         std.log.err("Error: {} loading material at path {s}\n", .{ err, asset_manifest.getPath(id) });
 
-        return &NullMaterial;
+        return NullMaterial;
     };
 }
 
-fn loadMaterialErr(self: *AssetManager, id: AssetId) !*const formats.Material {
+fn loadMaterialErr(self: *AssetManager, id: AssetId) !formats.Material {
     const path = asset_manifest.getPath(id);
     const data = try self.loadFile(self.frame_arena, path, TEXTURE_MAX_BYTES);
 
@@ -516,7 +528,7 @@ fn loadMaterialErr(self: *AssetManager, id: AssetId) !*const formats.Material {
     );
     try self.modified_times.put(self.allocator, id, data.modified);
 
-    return &self.loaded_assets.getPtr(id).?.material;
+    return material;
 }
 
 const LoadedAsset = union(enum) {
@@ -549,6 +561,7 @@ const LoadedMesh = struct {
 const LoadedTexture = struct {
     name: gl.GLuint,
     handle: gl.GLuint64,
+    uv_scale: Vec2 = Vec2.one(),
 };
 
 const LoadedScene = struct {
@@ -614,22 +627,23 @@ fn loadFile(self: *AssetManager, allocator: std.mem.Allocator, path: []const u8,
     return .{ .bytes = bytes, .modified = meta.modified() };
 }
 
-fn loadShader(self: *AssetManager, id: AssetId) *const LoadedShader {
+fn loadShader(self: *AssetManager, id: AssetId) LoadedShader {
     return self.loadShaderErr(id) catch |err| {
         std.log.err("Error: {} when loading shader id {} {s}", .{ err, id, asset_manifest.getPath(id) });
-        return &NullShader;
+        return NullShader;
     };
 }
 
-fn loadShaderErr(self: *AssetManager, id: AssetId) !*LoadedShader {
+fn loadShaderErr(self: *AssetManager, id: AssetId) !LoadedShader {
     const path = asset_manifest.getPath(id);
 
     const data = try self.loadFile(self.allocator, path, SHADER_MAX_BYTES);
 
-    try self.loaded_assets.put(self.allocator, id, .{ .shader = LoadedShader{ .source = data.bytes } });
+    const loaded_shader = LoadedShader{ .source = data.bytes };
+    try self.loaded_assets.put(self.allocator, id, .{ .shader = loaded_shader });
     try self.modified_times.put(self.allocator, id, data.modified);
 
-    return &self.loaded_assets.getPtr(id).?.shader;
+    return loaded_shader;
 }
 
 fn compileShader(self: *AssetManager, source: []const u8, shader_type: ShaderType) !gl.GLuint {
@@ -691,6 +705,7 @@ fn deleteDependees(self: *AssetManager, id: AssetId) void {
 }
 
 fn unloadAssetWithDependees(self: *AssetManager, id: AssetId) void {
+    std.log.debug("unload asset id {}: {s}\n", .{ id, asset_manifest.getPath(id) });
     self.deleteDependees(id);
 
     {

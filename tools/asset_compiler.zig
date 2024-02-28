@@ -578,18 +578,36 @@ fn processTexture(allocator: std.mem.Allocator, texture_type: TextureType, conte
 
     const rgba_data = rgba_data_c[0 .. width * height * 4];
 
-    if (comps == 4) {
-        premultiplyAlpha(rgba_data);
+    var padded_width: usize = width;
+    var padded_height: usize = height;
+    var rgba_data_padded = rgba_data;
+    if (width % 4 != 0 or height % 4 != 0 or width < 4 or height < 4) {
+        padded_width = @max(width + width % 4, 4);
+        padded_height = @max(height + height % 4, 4);
+
+        rgba_data_padded = try allocator.alloc(u8, padded_width * padded_height * 4);
+
+        var dst_surf = c.rgba_surface{
+            .width = @intCast(padded_width),
+            .height = @intCast(padded_height),
+            .stride = @intCast(padded_width * 4),
+            .ptr = rgba_data_padded.ptr,
+        };
+        var src_surf = c.rgba_surface{
+            .width = @intCast(width),
+            .height = @intCast(height),
+            .stride = @intCast(width * 4),
+            .ptr = rgba_data.ptr,
+        };
+        c.ReplicateBorders(&dst_surf, &src_surf, 0, 0, 32);
     }
+
+    // if (comps == 4) {
+    //     premultiplyAlpha(rgba_data);
+    // }
 
     const data_channels: usize = if (format == .bc5) 2 else 4;
-    const data = if (data_channels < 4) dropChannels(rgba_data, data_channels) else rgba_data;
-
-    // TODO: support textures not divisible by 4
-    if (width % 4 != 0 or height % 4 != 0) {
-        std.log.debug("Image size: {}X{}\n", .{ width, height });
-        return error.ImageSizeShouldBeDivisibleBy4;
-    }
+    const data = if (data_channels < 4) dropChannels(rgba_data_padded, data_channels) else rgba_data_padded;
 
     const mip_levels_to_gen = 1 + @as(
         u32,
@@ -600,14 +618,14 @@ fn processTexture(allocator: std.mem.Allocator, texture_type: TextureType, conte
     var mip_pyramid = std.ArrayList(MipLevel).init(allocator);
     try mip_pyramid.append(MipLevel{
         .data = data,
-        .width = width,
-        .height = height,
+        .width = padded_width,
+        .height = padded_height,
     });
 
     for (1..mip_levels_to_gen) |mip_level| {
         const divisor = std.math.powi(usize, 2, mip_level) catch unreachable;
-        const mip_width = width / divisor;
-        const mip_height = height / divisor;
+        const mip_width = padded_width / divisor;
+        const mip_height = padded_height / divisor;
 
         if (mip_width % 4 != 0 or mip_height % 4 != 0) {
             break;
@@ -634,6 +652,7 @@ fn processTexture(allocator: std.mem.Allocator, texture_type: TextureType, conte
             }
         }
 
+        std.log.debug("mip size {}x{}", .{ mip_data.width, mip_data.height });
         mip_data.out_data = try compressBlocksAlloc(allocator, mip_data.data, data_channels, format, @intCast(comps), mip_data.width, mip_data.height);
     }
 
@@ -647,6 +666,8 @@ fn processTexture(allocator: std.mem.Allocator, texture_type: TextureType, conte
             .format = format,
             .width = @intCast(width),
             .height = @intCast(height),
+            .padded_width = @intCast(padded_width),
+            .padded_height = @intCast(padded_height),
             .mip_count = @intCast(actual_mip_count),
         },
         .data = out_data,

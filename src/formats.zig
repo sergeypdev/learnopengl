@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const Handle = @import("assets").Handle;
 const za = @import("zalgebra");
 const Vec3 = za.Vec3;
-pub const Entity = @import("globals.zig").Entity;
+pub const Entity = @import("entity.zig").Entity;
 
 pub const native_endian = builtin.cpu.arch.endian();
 
@@ -197,6 +197,8 @@ pub const Texture = struct {
         format: Format,
         width: u32,
         height: u32,
+        padded_width: u32,
+        padded_height: u32,
         mip_count: u32,
     };
 
@@ -210,8 +212,8 @@ pub const Texture = struct {
     pub fn getMipDesc(self: *const Texture, mip_level: usize) MipDesc {
         const divisor = std.math.powi(u32, 2, @intCast(mip_level)) catch unreachable;
         return MipDesc{
-            .width = self.header.width / divisor,
-            .height = self.header.height / divisor,
+            .width = self.header.padded_width / divisor,
+            .height = self.header.padded_height / divisor,
         };
     }
 

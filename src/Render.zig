@@ -206,30 +206,54 @@ pub fn draw(self: *Render, cmd: DrawCommand) void {
     const material: Material = if (cmd.material_override) |mat| mat else mesh.material;
 
     gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&cmd.transform.data));
-    gl.uniform3fv(Uniform.Color.value(), 1, @ptrCast(&material.albedo.data));
-    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-        Uniform.AlbedoMap.value(),
-        self.assetman.resolveTexture(material.albedo_map).handle,
-    );
-    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-        Uniform.NormalMap.value(),
-        self.assetman.resolveTexture(material.normal_map).handle,
-    );
-    gl.uniform1fv(Uniform.Metallic.value(), 1, &material.metallic);
-    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-        Uniform.MetallicMap.value(),
-        self.assetman.resolveTexture(material.metallic_map).handle,
-    );
-    gl.uniform1fv(Uniform.Roughness.value(), 1, &material.roughness);
-    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-        Uniform.RoughnessMap.value(),
-        self.assetman.resolveTexture(material.roughness_map).handle,
-    );
-    gl.uniform1fv(Uniform.Emission.value(), 1, &material.emission);
-    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-        Uniform.EmissionMap.value(),
-        self.assetman.resolveTexture(material.emission_map).handle,
-    );
+    {
+        gl.uniform3fv(Uniform.Color.value(), 1, @ptrCast(&material.albedo.data));
+
+        const albedo_map = self.assetman.resolveTexture(material.albedo_map);
+        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+            Uniform.AlbedoMap.value(),
+            albedo_map.handle,
+        );
+        gl.uniform2fv(Uniform.AlbedoMapUVScale.value(), 1, @ptrCast(&albedo_map.uv_scale.data));
+    }
+    {
+        const normal_map = self.assetman.resolveTexture(material.normal_map);
+        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+            Uniform.NormalMap.value(),
+            normal_map.handle,
+        );
+        gl.uniform2fv(Uniform.NormalMapUVScale.value(), 1, @ptrCast(&normal_map.uv_scale.data));
+    }
+    {
+        gl.uniform1fv(Uniform.Metallic.value(), 1, &material.metallic);
+
+        const metallic_map = self.assetman.resolveTexture(material.metallic_map);
+        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+            Uniform.MetallicMap.value(),
+            metallic_map.handle,
+        );
+        gl.uniform2fv(Uniform.MetallicMapUVScale.value(), 1, @ptrCast(&metallic_map.uv_scale.data));
+    }
+    {
+        gl.uniform1fv(Uniform.Roughness.value(), 1, &material.roughness);
+
+        const roughness_map = self.assetman.resolveTexture(material.roughness_map);
+        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+            Uniform.RoughnessMap.value(),
+            roughness_map.handle,
+        );
+        gl.uniform2fv(Uniform.RoughnessMapUVScale.value(), 1, @ptrCast(&roughness_map.uv_scale.data));
+    }
+    {
+        gl.uniform1fv(Uniform.Emission.value(), 1, &material.emission);
+
+        const emission_map = self.assetman.resolveTexture(material.emission_map);
+        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
+            Uniform.EmissionMap.value(),
+            emission_map.handle,
+        );
+        gl.uniform2fv(Uniform.EmissionMapUVScale.value(), 1, @ptrCast(&emission_map.uv_scale.data));
+    }
 
     mesh.positions.bind(Render.Attrib.Position.value());
     mesh.normals.bind(Render.Attrib.Normal.value());
@@ -306,13 +330,18 @@ pub const Uniform = enum(gl.GLint) {
     ModelMatrix = 1,
     Color = 2,
     AlbedoMap = 3,
-    NormalMap = 4,
-    Metallic = 5,
-    MetallicMap = 6,
-    Roughness = 7,
-    RoughnessMap = 8,
-    Emission = 9,
-    EmissionMap = 10,
+    AlbedoMapUVScale = 4,
+    NormalMap = 5,
+    NormalMapUVScale = 6,
+    Metallic = 7,
+    MetallicMap = 8,
+    MetallicMapUVScale = 9,
+    Roughness = 10,
+    RoughnessMap = 11,
+    RoughnessMapUVScale = 12,
+    Emission = 13,
+    EmissionMap = 14,
+    EmissionMapUVScale = 15,
 
     pub inline fn value(self: Uniform) gl.GLint {
         return @intFromEnum(self);
@@ -339,10 +368,11 @@ const CameraMatrices = extern struct {
     view: Mat4,
 };
 pub const PointLight = extern struct {
-    pos_radius: Vec4, // x, y, z - vPos, w - radius
-    color_intensity: Vec4, // x, y, z - color, w - intensity
+    pos: Vec4, // x, y, z, w - vPos
+    color_radius: Vec4, // x, y, z - color, w - radius
 };
 
+// TODO: rename
 pub const PointLightArray = extern struct {
     lights: [MAX_POINT_LIGHTS]PointLight,
     count: c_uint,

@@ -103,7 +103,6 @@ fn make(step: *Step, prog_node: *std.Progress.Node) !void {
 
             var line_stream = std.io.fixedBufferStream(line);
             const asset_list_entry = try asset_list.readAssetListEntryText(alloc, line_stream.reader());
-            std.log.debug("list entry {} {s}", .{ asset_list_entry.type, asset_list_entry.src_path.getPath() });
             try assets.append(asset_list_entry);
         }
     }
@@ -166,7 +165,6 @@ fn writeAssetManifest(arena: std.mem.Allocator, writer: anytype, assets: []Asset
     );
     for (assets) |asset_list_entry| {
         const path = try asset_list_entry.getOutputPath(&buf);
-        std.log.debug("asset output path: {s}\n", .{path});
         try std.fmt.format(writer, "    asset_paths.put(fba.allocator(), {}, \"{}\") catch @panic(\"OOM\");\n", .{ asset_list_entry.getAssetId(), std.zig.fmtEscapes(path) });
     }
     try writer.writeAll("}\n\n");
