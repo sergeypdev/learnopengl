@@ -275,10 +275,10 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         }
     }
 
-    const scene = globals.g_mem.world.createScene(globals.g_assetman.resolveScene(a.Scenes.scifi_helmet.SciFiHelmet.scene));
+    const scene = globals.g_mem.world.createScene(globals.g_assetman.resolveScene(a.Scenes.amd_ryzen_9.scene));
     const ent = globals.g_mem.world.getEntity(scene) orelse @panic("WTF");
     ent.data.transform.pos = Vec3.new(0, 1, 0);
-    // ent.data.transform.scale = Vec3.one().scale(4);
+    ent.data.transform.scale = Vec3.one().scale(0.2);
 }
 
 export fn game_update() bool {

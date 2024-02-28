@@ -552,12 +552,17 @@ fn processTextureFromFile(allocator: std.mem.Allocator, input: []const u8, outpu
 /// Using naming conventions
 fn guessTextureTypeFromName(name: []const u8) TextureType {
     const stem = std.fs.path.stem(name);
-    const sub_ext = std.fs.path.extension(stem);
+    var buf: [std.fs.MAX_NAME_BYTES]u8 = undefined;
+    const lower_stem = std.ascii.lowerString(&buf, stem);
+    const sub_ext = std.fs.path.extension(lower_stem);
     if (std.mem.eql(u8, sub_ext, ".norm")) {
         return .Normal;
     }
-    if (std.mem.endsWith(u8, stem, "Normal")) {
+    if (std.mem.endsWith(u8, lower_stem, "normal")) {
         return .Normal;
+    }
+    if (std.mem.endsWith(u8, lower_stem, "metallicroughness")) {
+        return .MetallicRoughness;
     }
 
     return .Color;
@@ -566,6 +571,7 @@ fn guessTextureTypeFromName(name: []const u8) TextureType {
 const TextureType = enum {
     Color,
     Normal,
+    MetallicRoughness,
     HDR,
 };
 
