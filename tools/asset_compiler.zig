@@ -147,6 +147,7 @@ const AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE = c.aiTextur
 /// It all depends on the source asset.
 fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std.fs.Dir, asset_list_writer: anytype) !void {
     const input_z = try std.mem.concatWithSentinel(allocator, u8, &.{input}, 0);
+    const input_dir = std.fs.path.dirname(input) orelse "";
     // const config: *c.aiPropertyStore = @as(?*c.aiPropertyStore, @ptrCast(c.aiCreatePropertyStore())) orelse return error.PropertyStore;
     // defer c.aiReleasePropertyStore(config);
 
@@ -206,27 +207,27 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
             }
 
             if (c.aiGetMaterialTextureCount(material, c.aiTextureType_BASE_COLOR) > 0) {
-                const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_BASE_COLOR, 0);
+                const mat_texture = try getMaterialTexture(allocator, input_dir, material, c.aiTextureType_BASE_COLOR, 0);
                 const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
                 mat_output.albedo_map.id = entry.getAssetId();
             }
 
             _ = c.aiGetMaterialFloat(material, AI_MATKEY_METALLIC_FACTOR, 0, 0, &mat_output.metallic);
             if (c.aiGetMaterialTextureCount(material, c.aiTextureType_METALNESS) > 0) {
-                const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_METALNESS, 0);
+                const mat_texture = try getMaterialTexture(allocator, input_dir, material, c.aiTextureType_METALNESS, 0);
                 const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
                 mat_output.metallic_map.id = entry.getAssetId();
             }
 
             _ = c.aiGetMaterialFloat(material, AI_MATKEY_ROUGHNESS_FACTOR, 0, 0, &mat_output.roughness);
             if (c.aiGetMaterialTextureCount(material, c.aiTextureType_DIFFUSE_ROUGHNESS) > 0) {
-                const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_DIFFUSE_ROUGHNESS, 0);
+                const mat_texture = try getMaterialTexture(allocator, input_dir, material, c.aiTextureType_DIFFUSE_ROUGHNESS, 0);
                 const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
                 mat_output.roughness_map.id = entry.getAssetId();
             }
 
             if (c.aiGetMaterialTextureCount(material, c.aiTextureType_NORMALS) > 0) {
-                const mat_texture = try getMaterialTexture(allocator, material, c.aiTextureType_NORMALS, 0);
+                const mat_texture = try getMaterialTexture(allocator, input_dir, material, c.aiTextureType_NORMALS, 0);
                 const entry = mat_texture.path.resolveAssetListEntry(texture_outputs);
                 switch (mat_texture.path) {
                     .embedded => |idx| {
@@ -355,7 +356,7 @@ const AssimpTextureRef = union(enum) {
     external: []const u8,
     embedded: usize,
 
-    pub fn fromString(str: []const u8) !AssimpTextureRef {
+    pub fn fromRelativePath(allocator: std.mem.Allocator, input_dir: []const u8, str: []const u8) !AssimpTextureRef {
         if (str.len == 0) return error.EmptyPath;
 
         if (str[0] == '*') {
@@ -364,7 +365,11 @@ const AssimpTextureRef = union(enum) {
             return .{ .embedded = idx };
         }
 
-        return .{ .external = str };
+        const resolved_path = try std.fs.path.resolve(allocator, &.{ input_dir, str });
+        defer allocator.free(resolved_path);
+        const cwd_relative_path = try std.fs.path.relative(allocator, try std.fs.cwd().realpathAlloc(allocator, "."), resolved_path);
+
+        return .{ .external = cwd_relative_path };
     }
 
     pub fn resolveAssetListEntry(self: AssimpTextureRef, embedded: []const TextureOutput) AssetListEntry {
@@ -389,7 +394,7 @@ const MaterialTexture = struct {
     map_mode: [3]c.aiTextureMapMode = .{ 0, 0, 0 },
     flags: c_uint = 0,
 };
-fn getMaterialTexture(allocator: std.mem.Allocator, material: *c.aiMaterial, _type: c.aiTextureType, index: c_uint) !MaterialTexture {
+fn getMaterialTexture(allocator: std.mem.Allocator, input_dir: []const u8, material: *c.aiMaterial, _type: c.aiTextureType, index: c_uint) !MaterialTexture {
     var path: c.aiString = undefined;
     var result: MaterialTexture = .{};
 
@@ -406,8 +411,8 @@ fn getMaterialTexture(allocator: std.mem.Allocator, material: *c.aiMaterial, _ty
         &result.flags,
     ));
 
-    const path_str: []u8 = try allocator.dupe(u8, @alignCast(path.data[0..path.length]));
-    result.path = try AssimpTextureRef.fromString(path_str);
+    const path_str: []u8 = @alignCast(path.data[0..path.length]);
+    result.path = try AssimpTextureRef.fromRelativePath(allocator, input_dir, path_str);
 
     return result;
 }
@@ -546,8 +551,12 @@ fn processTextureFromFile(allocator: std.mem.Allocator, input: []const u8, outpu
 
 /// Using naming conventions
 fn guessTextureTypeFromName(name: []const u8) TextureType {
-    const sub_ext = std.fs.path.extension(std.fs.path.stem(name));
+    const stem = std.fs.path.stem(name);
+    const sub_ext = std.fs.path.extension(stem);
     if (std.mem.eql(u8, sub_ext, ".norm")) {
+        return .Normal;
+    }
+    if (std.mem.endsWith(u8, stem, "Normal")) {
         return .Normal;
     }
 
@@ -705,13 +714,10 @@ fn compressBlocksAlloc(
     switch (format) {
         .bc7 => {
             var settings: c.bc7_enc_settings = .{};
-            if (original_components == 3) {
-                c.GetProfile_ultrafast(&settings);
-            } else if (original_components == 4) {
+            if (original_components == 4) {
                 c.GetProfile_alpha_ultrafast(&settings);
             } else {
-                std.log.debug("Channel count: {}\n", .{original_components});
-                return error.UnsupportedChannelCount;
+                c.GetProfile_ultrafast(&settings);
             }
             c.CompressBlocksBC7(&rgba_surf, output.ptr, &settings);
         },
