@@ -36,11 +36,14 @@ command_buffer: [MAX_DRAW_COMMANDS]DrawCommand = undefined,
 command_count: usize = 0,
 ubo_align: usize = 0,
 shadow_vao: gl.GLuint = 0,
-shadow_texture_arrray: gl.GLuint = 0,
+shadow_texture_array: gl.GLuint = 0,
 shadow_texture_handle: gl.GLuint64 = 0,
 shadow_framebuffer: gl.GLuint = 0,
 shadow_matrices_buffer: gl.GLuint = 0,
 shadow_matrices: CameraMatrices = .{},
+cube_shadow_texture_array: gl.GLuint = 0,
+cube_shadow_texture_handle: gl.GLuint64 = 0,
+cube_shadow_framebuffer: gl.GLuint = 0,
 
 pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetman: *AssetManager) Render {
     var render = Render{
@@ -136,34 +139,68 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
     }
 
     {
-        // Shadow texture array
-        gl.createTextures(gl.TEXTURE_2D_ARRAY, 1, &render.shadow_texture_arrray);
-        checkGLError();
-        std.debug.assert(render.shadow_texture_arrray != 0);
+        // 2D Shadow texture array
+        {
+            gl.createTextures(gl.TEXTURE_2D_ARRAY, 1, &render.shadow_texture_array);
+            checkGLError();
+            std.debug.assert(render.shadow_texture_array != 0);
 
-        gl.textureStorage3D(render.shadow_texture_arrray, 1, gl.DEPTH_COMPONENT16, 2048, 2048, 1);
-        checkGLError();
+            gl.textureStorage3D(render.shadow_texture_array, 1, gl.DEPTH_COMPONENT16, 2048, 2048, 1);
+            checkGLError();
 
-        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
-        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_COMPARE_FUNC, gl.LESS);
-        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_BORDER);
-        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_BORDER);
-        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.textureParameterfv(render.shadow_texture_arrray, gl.TEXTURE_BORDER_COLOR, @ptrCast(&Vec4.one().data));
+            gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+            gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_COMPARE_FUNC, gl.LESS);
+            gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_BORDER);
+            gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_BORDER);
+            gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.textureParameterfv(render.shadow_texture_array, gl.TEXTURE_BORDER_COLOR, @ptrCast(&Vec4.one().data));
+        }
 
         // First shadow texture handle
-        render.shadow_texture_handle = gl.GL_ARB_bindless_texture.getTextureHandleARB(render.shadow_texture_arrray);
-        checkGLError();
-        gl.GL_ARB_bindless_texture.makeTextureHandleResidentARB(render.shadow_texture_handle);
-        checkGLError();
+        {
+            render.shadow_texture_handle = gl.GL_ARB_bindless_texture.getTextureHandleARB(render.shadow_texture_array);
+            checkGLError();
+            std.debug.assert(render.shadow_texture_handle != 0);
+            gl.GL_ARB_bindless_texture.makeTextureHandleResidentARB(render.shadow_texture_handle);
+            checkGLError();
+        }
+
+        // Cube Shadow texture array
+        {
+            gl.createTextures(gl.TEXTURE_CUBE_MAP_ARRAY, 1, &render.cube_shadow_texture_array);
+            checkGLError();
+            std.debug.assert(render.cube_shadow_texture_array != 0);
+
+            gl.textureStorage3D(render.cube_shadow_texture_array, 1, gl.DEPTH_COMPONENT16, 512, 512, MAX_POINT_LIGHTS * 6);
+            checkGLError();
+
+            gl.textureParameteri(render.cube_shadow_texture_array, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+            gl.textureParameteri(render.cube_shadow_texture_array, gl.TEXTURE_COMPARE_FUNC, gl.LESS);
+            gl.textureParameteri(render.cube_shadow_texture_array, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.textureParameteri(render.cube_shadow_texture_array, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.textureParameteri(render.cube_shadow_texture_array, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.textureParameteri(render.cube_shadow_texture_array, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.textureParameteri(render.cube_shadow_texture_array, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+        }
+
+        // Cube Shadow array handle
+        {
+            render.cube_shadow_texture_handle = gl.GL_ARB_bindless_texture.getTextureHandleARB(render.cube_shadow_texture_array);
+            checkGLError();
+            std.debug.assert(render.cube_shadow_texture_handle != 0);
+            gl.GL_ARB_bindless_texture.makeTextureHandleResidentARB(render.cube_shadow_texture_handle);
+            checkGLError();
+        }
 
         // Shadow FBO
-        gl.createFramebuffers(1, &render.shadow_framebuffer);
-        checkGLError();
-        std.debug.assert(render.shadow_framebuffer != 0);
+        {
+            gl.createFramebuffers(1, &render.shadow_framebuffer);
+            checkGLError();
+            std.debug.assert(render.shadow_framebuffer != 0);
+        }
 
-        gl.namedFramebufferTextureLayer(render.shadow_framebuffer, gl.DEPTH_ATTACHMENT, render.shadow_texture_arrray, 0, 0);
+        gl.namedFramebufferTextureLayer(render.shadow_framebuffer, gl.DEPTH_ATTACHMENT, render.shadow_texture_array, 0, 0);
         const check_fbo_status = gl.checkNamedFramebufferStatus(render.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
         if (check_fbo_status != gl.FRAMEBUFFER_COMPLETE) {
             std.log.debug("Shadow Framebuffer Incomplete: {}\n", .{check_fbo_status});
@@ -251,61 +288,88 @@ pub fn draw(self: *Render, cmd: DrawCommand) void {
 pub fn finish(self: *Render) void {
     const ginit = globals.g_init;
 
-    var dir_light: ?PointLight = null;
-    var dir_light_vp: ?Mat4 = null;
+    const lights = self.getPointLights();
 
-    // Find directional light
+    // Light shadow maps
     {
-        const lights = self.getPointLights();
+        gl.bindVertexArray(self.shadow_vao);
 
-        for (lights.lights[0..lights.count]) |*light| {
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, self.shadow_framebuffer);
+
+        for (lights.lights[0..lights.count], 0..) |*light, i| {
+            gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.shadow).program);
+            // Directional light
             if (std.math.approxEqAbs(f32, light.pos.w(), 0, std.math.floatEps(f32))) {
-                dir_light = light.*;
-            }
+                gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.shadow_texture_array, 0, 0);
+                const check_fbo_status = gl.checkNamedFramebufferStatus(self.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
+                if (check_fbo_status != gl.FRAMEBUFFER_COMPLETE) {
+                    std.log.debug("Shadow Framebuffer Incomplete: {}\n", .{check_fbo_status});
+                }
 
-            // Transform view to camera view space
-            light.pos = self.camera.view_mat.mulByVec4(light.pos);
+                gl.viewport(0, 0, 2048, 2048);
+
+                const camera_matrix = &self.shadow_matrices;
+                camera_matrix.* = .{
+                    .projection = Mat4.orthographic(-2, 2, -2, 2, -5, 5),
+                    .view = Mat4.lookAt(
+                        Vec3.new(light.pos.x(), light.pos.y(), light.pos.z()).scale(-1),
+                        Vec3.zero(),
+                        Vec3.up(),
+                    ),
+                };
+                light.shadow_vp = camera_matrix.projection.mul(camera_matrix.view);
+
+                gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(&self.shadow_matrices));
+                checkGLError();
+
+                gl.clear(gl.DEPTH_BUFFER_BIT);
+                gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
+
+                self.renderShadow();
+            } else {
+                // Point Light
+                gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.cube_shadow).program);
+
+                const pos = Vec3.new(light.pos.x(), light.pos.y(), light.pos.z());
+                light.shadow_vp = Mat4.fromTranslate(pos.negate());
+                // For each cube face
+                for (cube_camera_dirs, 0..) |cam_dir, face| {
+                    gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.cube_shadow_texture_array, 0, @intCast(i * 6 + face));
+                    const check_fbo_status = gl.checkNamedFramebufferStatus(self.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
+                    if (check_fbo_status != gl.FRAMEBUFFER_COMPLETE) {
+                        std.log.debug("Shadow Framebuffer Incomplete: {}\n", .{check_fbo_status});
+                    }
+
+                    gl.viewport(0, 0, 512, 512);
+
+                    const near_far = Vec2.new(0.1, 10);
+                    const camera_matrix = &self.shadow_matrices;
+                    camera_matrix.* = .{
+                        .projection = Mat4.perspective(90, 1, near_far.x(), near_far.y()),
+                        .view = Mat4.lookAt(
+                            pos,
+                            pos.add(cam_dir.target),
+                            cam_dir.up,
+                        ),
+                    };
+                    light.near_far = near_far;
+                    gl.uniform2f(Uniform.NearFarPlanes.value(), near_far.x(), near_far.y());
+
+                    gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(&self.shadow_matrices));
+                    checkGLError();
+
+                    gl.clear(gl.DEPTH_BUFFER_BIT);
+                    gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
+
+                    self.renderShadow();
+                }
+            }
         }
     }
 
-    // Directional Light shadow map
-    if (dir_light) |light| {
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, self.shadow_framebuffer);
-        gl.viewport(0, 0, 2048, 2048);
-        gl.clear(gl.DEPTH_BUFFER_BIT);
-
-        gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.shadow).program);
-        gl.bindVertexArray(self.shadow_vao);
-
-        const camera_matrix = &self.shadow_matrices;
-        camera_matrix.* = .{
-            .projection = Mat4.orthographic(-2, 2, -2, 2, -5, 5),
-            .view = Mat4.lookAt(
-                Vec3.new(light.pos.x(), light.pos.y(), light.pos.z()).scale(-1),
-                Vec3.zero(),
-                Vec3.up(),
-            ),
-        };
-        dir_light_vp = camera_matrix.projection.mul(camera_matrix.view);
-        // TODO: use multiple buffers for this in the future
-        gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(camera_matrix));
-        checkGLError();
-        gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
-
-        for (self.command_buffer[0..self.command_count]) |*cmd| {
-            const mesh = self.assetman.resolveMesh(cmd.mesh);
-
-            gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&cmd.transform.data));
-            mesh.positions.bind(Render.Attrib.Position.value());
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
-
-            gl.drawElements(
-                gl.TRIANGLES,
-                mesh.indices.count,
-                mesh.indices.type,
-                @ptrFromInt(mesh.indices.offset),
-            );
-        }
+    // Light world space to view space
+    for (lights.lights[0..lights.count]) |*light| {
+        light.pos = self.camera.view_mat.mulByVec4(light.pos);
     }
 
     var width: c_int = 0;
@@ -393,10 +457,8 @@ pub fn finish(self: *Render) void {
             );
             gl.uniform2fv(Uniform.EmissionMapUVScale.value(), 1, @ptrCast(&emission_map.uv_scale.data));
         }
-        if (dir_light != null) {
-            gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMap.value(), self.shadow_texture_handle);
-            gl.uniformMatrix4fv(Uniform.ShadowMapVP.value(), 1, gl.FALSE, @ptrCast(&dir_light_vp.?.data));
-        }
+        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMap2D.value(), self.shadow_texture_handle);
+        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMapCube.value(), self.cube_shadow_texture_handle);
 
         mesh.positions.bind(Render.Attrib.Position.value());
         mesh.normals.bind(Render.Attrib.Normal.value());
@@ -414,6 +476,62 @@ pub fn finish(self: *Render) void {
     self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     c.SDL_GL_SwapWindow(ginit.window);
     c.SDL_Delay(1);
+}
+
+const CubeCameraDir = struct {
+    face: gl.GLenum,
+    target: Vec3,
+    up: Vec3,
+};
+
+const cube_camera_dirs = [6]CubeCameraDir{
+    .{
+        .face = gl.TEXTURE_CUBE_MAP_POSITIVE_X,
+        .target = Vec3.right(),
+        .up = Vec3.down(),
+    },
+    .{
+        .face = gl.TEXTURE_CUBE_MAP_NEGATIVE_X,
+        .target = Vec3.left(),
+        .up = Vec3.down(),
+    },
+    .{
+        .face = gl.TEXTURE_CUBE_MAP_POSITIVE_Y,
+        .target = Vec3.up(),
+        .up = Vec3.forward(),
+    },
+    .{
+        .face = gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,
+        .target = Vec3.down(),
+        .up = Vec3.back(),
+    },
+    .{
+        .face = gl.TEXTURE_CUBE_MAP_POSITIVE_Z,
+        .target = Vec3.forward(),
+        .up = Vec3.down(),
+    },
+    .{
+        .face = gl.TEXTURE_CUBE_MAP_NEGATIVE_Z,
+        .target = Vec3.back(),
+        .up = Vec3.down(),
+    },
+};
+
+fn renderShadow(self: *Render) void {
+    for (self.command_buffer[0..self.command_count]) |*cmd| {
+        const mesh = self.assetman.resolveMesh(cmd.mesh);
+
+        gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&cmd.transform.data));
+        mesh.positions.bind(Render.Attrib.Position.value());
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
+
+        gl.drawElements(
+            gl.TRIANGLES,
+            mesh.indices.count,
+            mesh.indices.type,
+            @ptrFromInt(mesh.indices.offset),
+        );
+    }
 }
 
 pub fn checkGLError() void {
@@ -483,8 +601,10 @@ pub const Uniform = enum(gl.GLint) {
     EmissionMap = 14,
     EmissionMapUVScale = 15,
 
-    ShadowMap = 16,
-    ShadowMapVP = 17,
+    ShadowMap2D = 16,
+    ShadowMapCube = 17,
+
+    NearFarPlanes = 18, // vec2 stores near and far planes for perspective projection
 
     pub inline fn value(self: Uniform) gl.GLint {
         return @intFromEnum(self);
@@ -513,6 +633,8 @@ const CameraMatrices = extern struct {
 pub const PointLight = extern struct {
     pos: Vec4, // x, y, z, w - vPos
     color_radius: Vec4, // x, y, z - color, w - radius
+    shadow_vp: Mat4 = Mat4.identity(),
+    near_far: Vec2 = Vec2.zero(),
 };
 
 // TODO: rename

@@ -1,0 +1,6 @@
+
+{
+  "shader": "cube_shadow.glsl",
+  "vertex": true,
+  "fragment": true
+}

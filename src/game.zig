@@ -114,6 +114,7 @@ fn loadGL() void {
     };
     gl.debugMessageCallback(glDebugCallback, null);
     // gl.enable(gl.DEBUG_OUTPUT);
+    gl.enable(gl.DEBUG_OUTPUT_SYNCHRONOUS);
 }
 
 fn glDebugCallback(source: gl.GLenum, _type: gl.GLenum, id: gl.GLuint, severity: gl.GLenum, length: gl.GLsizei, message: [*:0]const u8, userParam: ?*anyopaque) callconv(.C) void {
@@ -188,7 +189,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     _ = globals.g_mem.world.addEntity(.{
         .flags = .{ .dir_light = true, .rotate = true },
         .transform = .{ .rot = Quat.fromEulerAngles(Vec3.new(60, 15, 0)) },
-        .light = .{ .color_intensity = Vec4.new(1, 1, 0.83, 1) },
+        .light = .{ .color_intensity = Vec4.new(1, 1, 0.83, 0.7) },
     });
 
     const light_root = globals.g_mem.world.addEntity(.{
