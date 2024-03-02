@@ -56,6 +56,11 @@ VERTEX_EXPORT VertexData {
   vec3 wPos;
 } VertexOut;
 
+float random(vec4 seed4) {
+  float dot_product = dot(seed4, vec4(12.9898,78.233,45.164,94.673));
+  return fract(sin(dot_product) * 43758.5453);
+}
+
 #if VERTEX_SHADER
 
 layout(location = 0) in vec3 aPos;
@@ -133,6 +138,12 @@ float lightAttenuation(float point, float dist, float radius) {
   return att;
 }
 
+vec2 poissonDisk[4] = vec2[](
+  vec2( -0.94201624, -0.39906216 ),
+  vec2( 0.94558609, -0.76890725 ),
+  vec2( -0.094184101, -0.92938870 ),
+  vec2( 0.34495938, 0.29387760 )
+);
 
 vec3 microfacetModel(Material mat, Light light, vec3 P, vec3 N) {
   vec3 diffuseBrdf = vec3(0); // metallic
@@ -166,9 +177,41 @@ vec3 microfacetModel(Material mat, Light light, vec3 P, vec3 N) {
   float NDotL = max(dot(N, L), 0);
   float NDotV = dot(N, V);
 
+  float shadow_mult = 1;
+  //// TODO: Shadows for directional light only for now
+  if (point == 0) {
+    vec4 shadow_pos = shadow_map_vp * vec4(VertexOut.wPos, 1.0);
+    shadow_pos /= shadow_pos.w;
+    shadow_pos.xyz = shadow_pos.xyz * 0.5 + 0.5; // [-1, 1] to [0, 1]
+    float bias = 0.005 * tan(acos(NDotL));
+    shadow_pos.z -= bias;
+
+    vec4 texcoord;
+    texcoord.xyw = shadow_pos.xyz; // sampler2DArrayShadow strange texcoord mapping
+    texcoord.z = 0; // First shadow map
+
+    float sum = 0;
+    vec2 tex_scale = 1.0 / vec2(textureSize(shadow_maps, 0));
+
+    for (float y = -1.5; y <= 1.5; y += 1) {
+      for (float x = -1.5; x <= 1.5; x += 1) {
+        sum += texture(shadow_maps, vec4(texcoord.xy + vec2(x, y) * tex_scale, texcoord.zw));
+      }
+    }
+
+    shadow_mult = sum / 16.0;
+
+    // for (int i=0; i<4; i++){
+    //   int index = int(16.0 * random(vec4(VertexOut.wPos.xyz * 1000.0, i))) % 4;
+    //   float depth_test = texture(shadow_maps, vec4(texcoord.xy + poissonDisk[index]/700.0, texcoord.zw));
+    //   shadow_mult -= 0.25 * (1 - depth_test);
+    // }
+    //shadow_mult = texture(shadow_maps, texcoord);
+  }
+
   vec3 specBrdf = 0.25 * ggxDistribution(mat, NDotH) * schlickFresnel(mat, LDotH) * geomSmith(mat, NDotL) * geomSmith(mat, NDotV);
 
-  return (diffuseBrdf + PI * specBrdf) * lightI * NDotL;
+  return (diffuseBrdf + PI * specBrdf) * lightI * NDotL * shadow_mult;
 }
 
 void main() {
@@ -183,23 +226,7 @@ void main() {
   vec3 finalColor = vec3(0);
 
   for (int i = 0; i < lights_count; i++) {
-    float shadow_mult = 1;
-
-    //// TODO: Shadows for directional light only for now
-    if (lights[i].vPos.w == 0) {
-      vec4 shadow_pos = shadow_map_vp * vec4(VertexOut.wPos, 1.0);
-      shadow_pos /= shadow_pos.w;
-      shadow_pos.xyz = shadow_pos.xyz * 0.5 + 0.5; // [-1, 1] to [0, 1]
-      float bias = 0.005;
-      shadow_pos.z -= bias;
-
-      vec4 texcoord;
-      texcoord.xyw = shadow_pos.xyz; // sampler2DArrayShadow strange texcoord mapping
-      texcoord.z = 0; // First shadow map
-
-      shadow_mult = texture(shadow_maps, texcoord).r;
-    }
-    finalColor += microfacetModel(material, lights[i], VertexOut.vPos, N) * shadow_mult;
+    finalColor += microfacetModel(material, lights[i], VertexOut.vPos, N);
   }
 
   FragColor = vec4(finalColor, 1.0f);

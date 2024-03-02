@@ -141,15 +141,16 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         checkGLError();
         std.debug.assert(render.shadow_texture_arrray != 0);
 
-        gl.textureStorage3D(render.shadow_texture_arrray, 1, gl.DEPTH_COMPONENT16, 1024, 1024, 1);
+        gl.textureStorage3D(render.shadow_texture_arrray, 1, gl.DEPTH_COMPONENT16, 2048, 2048, 1);
         checkGLError();
 
         gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
-        //gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
-        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_COMPARE_FUNC, gl.LESS);
+        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_BORDER);
+        gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_BORDER);
         gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.textureParameteri(render.shadow_texture_arrray, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.textureParameterfv(render.shadow_texture_arrray, gl.TEXTURE_BORDER_COLOR, @ptrCast(&Vec4.one().data));
 
         // First shadow texture handle
         render.shadow_texture_handle = gl.GL_ARB_bindless_texture.getTextureHandleARB(render.shadow_texture_arrray);
@@ -270,7 +271,7 @@ pub fn finish(self: *Render) void {
     // Directional Light shadow map
     if (dir_light) |light| {
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, self.shadow_framebuffer);
-        gl.viewport(0, 0, 1024, 1024);
+        gl.viewport(0, 0, 2048, 2048);
         gl.clear(gl.DEPTH_BUFFER_BIT);
 
         gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.shadow).program);
@@ -278,7 +279,7 @@ pub fn finish(self: *Render) void {
 
         const camera_matrix = &self.shadow_matrices;
         camera_matrix.* = .{
-            .projection = Mat4.orthographic(-5, 5, -5, 5, -10, 10),
+            .projection = Mat4.orthographic(-2, 2, -2, 2, -5, 5),
             .view = Mat4.lookAt(
                 Vec3.new(light.pos.x(), light.pos.y(), light.pos.z()).scale(-1),
                 Vec3.zero(),
