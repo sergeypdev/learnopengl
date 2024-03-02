@@ -43,6 +43,9 @@ layout(location = 13) uniform vec3 emission;
 layout(location = 14, bindless_sampler) uniform sampler2D emission_map;
 layout(location = 15) uniform vec2 emission_map_uv_scale = vec2(1);
 
+layout(location = 16, bindless_sampler) uniform sampler2DArrayShadow shadow_maps;
+layout(location = 17) uniform mat4 shadow_map_vp;
+
 
 // Input, output blocks
 
@@ -50,6 +53,7 @@ VERTEX_EXPORT VertexData {
   vec3 vPos;
   vec2 uv;
   mat3 vTBN;
+  vec3 wPos;
 } VertexOut;
 
 #if VERTEX_SHADER
@@ -70,6 +74,8 @@ void main() {
     vec3 B = normalize(vec3(view * model * vec4(aBitangent, 0.0)));
     vec3 N = normalize(vec3(view * model * vec4(aNormal, 0.0)));
     VertexOut.vTBN = mat3(T, B, N);
+    vec4 wPos = model * vec4(aPos.xyz, 1.0);
+    VertexOut.wPos = wPos.xyz / wPos.w;
 }
 #endif // VERTEX_SHADER
 
@@ -177,10 +183,24 @@ void main() {
   vec3 finalColor = vec3(0);
 
   for (int i = 0; i < lights_count; i++) {
-    finalColor += microfacetModel(material, lights[i], VertexOut.vPos, N);
-  }
+    float shadow_mult = 1;
 
-  // finalColor += microfacetModel(material, Light(vec4(VertexOut.vPos + N, 0.01), vec4(1, 1, 1, 10)), VertexOut.vPos, N);
+    //// TODO: Shadows for directional light only for now
+    if (lights[i].vPos.w == 0) {
+      vec4 shadow_pos = shadow_map_vp * vec4(VertexOut.wPos, 1.0);
+      shadow_pos /= shadow_pos.w;
+      shadow_pos.xyz = shadow_pos.xyz * 0.5 + 0.5; // [-1, 1] to [0, 1]
+      float bias = 0.005;
+      shadow_pos.z -= bias;
+
+      vec4 texcoord;
+      texcoord.xyw = shadow_pos.xyz; // sampler2DArrayShadow strange texcoord mapping
+      texcoord.z = 0; // First shadow map
+
+      shadow_mult = texture(shadow_maps, texcoord).r;
+    }
+    finalColor += microfacetModel(material, lights[i], VertexOut.vPos, N) * shadow_mult;
+  }
 
   FragColor = vec4(finalColor, 1.0f);
 

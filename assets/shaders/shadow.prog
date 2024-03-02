@@ -1,0 +1,6 @@
+
+{
+  "shader": "shadow.glsl",
+  "vertex": true,
+  "fragment": true
+}

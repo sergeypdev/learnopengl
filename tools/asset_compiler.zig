@@ -576,7 +576,6 @@ const TextureType = enum {
 };
 
 fn processTexture(allocator: std.mem.Allocator, texture_type: TextureType, contents: []const u8, out_file: std.fs.File) !void {
-    const format = if (texture_type == .Normal) formats.Texture.Format.bc5 else formats.Texture.Format.bc7;
     var width_int: c_int = 0;
     var height_int: c_int = 0;
     var comps: c_int = 0;
@@ -587,6 +586,14 @@ fn processTexture(allocator: std.mem.Allocator, texture_type: TextureType, conte
         return error.ImageLoadError;
     }
     defer c.stbi_image_free(rgba_data_c);
+
+    var format = formats.Texture.Format.bc7;
+
+    // TODO: bc4
+    if (comps == 1) {}
+    if (texture_type == .Normal or comps == 2) {
+        format = .bc5;
+    }
 
     const width: usize = @intCast(width_int);
     const height: usize = @intCast(height_int);

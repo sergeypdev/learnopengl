@@ -113,7 +113,7 @@ fn loadGL() void {
         @panic("gl.load");
     };
     gl.debugMessageCallback(glDebugCallback, null);
-    //gl.enable(gl.DEBUG_OUTPUT);
+    // gl.enable(gl.DEBUG_OUTPUT);
 }
 
 fn glDebugCallback(source: gl.GLenum, _type: gl.GLenum, id: gl.GLuint, severity: gl.GLenum, length: gl.GLsizei, message: [*:0]const u8, userParam: ?*anyopaque) callconv(.C) void {
@@ -186,9 +186,10 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     gl.viewport(0, 0, globals.g_init.width, globals.g_init.height);
 
     _ = globals.g_mem.world.addEntity(.{
-        .flags = .{ .dir_light = true },
+        .flags = .{ .dir_light = true, .rotate = true },
         .transform = .{ .rot = Quat.fromEulerAngles(Vec3.new(60, 15, 0)) },
         .light = .{ .color_intensity = Vec4.new(1, 1, 0.83, 1) },
+        .rotate = .{ .rate = 45, .axis = Vec3.up() },
     });
 
     const light_root = globals.g_mem.world.addEntity(.{
@@ -224,7 +225,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     // Plane
     _ = globals.g_mem.world.addEntity(.{
         .flags = .{ .mesh = true },
-        .transform = .{ .scale = Vec3.one().scale(2) },
+        .transform = .{ .scale = Vec3.one().scale(10) },
         .mesh = .{
             .handle = a.Meshes.plane.Plane,
             .material = .{
@@ -442,7 +443,6 @@ export fn game_update() bool {
                 if (ent.data.flags.point_light) {
                     const pos = ent.globalMatrix(&gmem.world).extractTranslation();
                     var pos4 = Vec4.new(pos.x(), pos.y(), pos.z(), 1.0);
-                    pos4 = gmem.render.camera.view_mat.mulByVec4(pos4);
 
                     const color = ent.data.light.premultipliedColor();
                     point_lights.lights[point_lights.count] = .{
@@ -455,8 +455,7 @@ export fn game_update() bool {
                     }
                 }
                 if (ent.data.flags.dir_light) {
-                    var dir4 = ent.globalMatrix(&gmem.world).mulByVec4(Vec4.forward());
-                    dir4 = gmem.render.camera.view_mat.mulByVec4(dir4);
+                    const dir4 = ent.globalMatrix(&gmem.world).mulByVec4(Vec4.forward());
                     const color = ent.data.light.premultipliedColor();
                     point_lights.lights[point_lights.count] = .{
                         .pos = dir4,

@@ -51,6 +51,7 @@ pub const Entity = struct {
 
         pub fn rotate(self: *Transform, axis: Vec3, angle: f32) void {
             self.rot = self.rot.mul(Quat.fromAxis(angle, axis));
+            self.rot = self.rot.norm();
             self.dirty();
         }
     };
