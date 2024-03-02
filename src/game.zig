@@ -188,8 +188,9 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
     _ = globals.g_mem.world.addEntity(.{
         .flags = .{ .dir_light = true, .rotate = true },
-        .transform = .{ .rot = Quat.fromEulerAngles(Vec3.new(60, 15, 0)) },
+        .transform = .{ .rot = Quat.fromEulerAngles(Vec3.new(30, 15, 0)) },
         .light = .{ .color_intensity = Vec4.new(1, 1, 0.83, 0.7) },
+        .rotate = .{ .axis = Vec3.up(), .rate = -45 },
     });
 
     const light_root = globals.g_mem.world.addEntity(.{
