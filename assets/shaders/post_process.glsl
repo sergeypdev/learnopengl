@@ -20,7 +20,11 @@ layout(binding = 0) uniform sampler2D screen_sampler;
 out vec4 FragColor;
 
 void main() {
-  FragColor = vec4(1) - texture(screen_sampler, VertexOut.uv);
+  float gamma = 2.2;
+  vec4 hdr_color = texture(screen_sampler, VertexOut.uv);
+
+  FragColor.rgb = pow(hdr_color.rgb, vec3(1.0/gamma));
+  FragColor.a = 1;
 }
 
 
