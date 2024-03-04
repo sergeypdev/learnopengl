@@ -220,7 +220,8 @@ vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
     vec4 shadow_pos = light.shadow_vp * vec4(VertexOut.wPos, 1.0);
     shadow_pos.xy = (light.shadow_vp * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xy;
     shadow_pos /= shadow_pos.w;
-    shadow_pos.xyz = shadow_pos.xyz * 0.5 + 0.5; // [-1, 1] to [0, 1]
+    shadow_pos.xy = shadow_pos.xy * 0.5 + 0.5; // [-1, 1] to [0, 1]
+    shadow_pos.z = min(shadow_pos.z, 1);
     shadow_pos.z -= constant_bias;
 
 

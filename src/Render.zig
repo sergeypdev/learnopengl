@@ -53,6 +53,8 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         .assetman = assetman,
     };
 
+    gl.clipControl(gl.LOWER_LEFT, gl.ZERO_TO_ONE); // use [0, 1] depth in NDC
+
     var buffer_align_int: gl.GLint = 0;
     gl.getIntegerv(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT, &buffer_align_int);
 
@@ -151,11 +153,15 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
 
             gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
             gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_COMPARE_FUNC, gl.LESS);
+
+            var border = [_]f32{1} ** 4;
+            gl.textureParameterfv(render.shadow_texture_array, gl.TEXTURE_BORDER_COLOR, &border);
+            checkGLError();
+
             gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_BORDER);
             gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_BORDER);
             gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
             gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-            gl.textureParameterfv(render.shadow_texture_array, gl.TEXTURE_BORDER_COLOR, @ptrCast(&Vec4.one().data));
         }
 
         // First shadow texture handle
@@ -199,6 +205,8 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
             gl.createFramebuffers(1, &render.shadow_framebuffer);
             checkGLError();
             std.debug.assert(render.shadow_framebuffer != 0);
+            gl.namedFramebufferDrawBuffer(render.shadow_framebuffer, gl.NONE);
+            gl.namedFramebufferReadBuffer(render.shadow_framebuffer, gl.NONE);
         }
 
         gl.namedFramebufferTextureLayer(render.shadow_framebuffer, gl.DEPTH_ATTACHMENT, render.shadow_texture_array, 0, 0);
@@ -311,7 +319,7 @@ pub fn finish(self: *Render) void {
 
                 const camera_matrix = &self.shadow_matrices;
                 camera_matrix.* = .{
-                    .projection = Mat4.orthographic(-2, 2, -2, 2, -5, 5),
+                    .projection = math.orthographic(-4, 4, -4, 4, -5, 5),
                     .view = Mat4.lookAt(
                         Vec3.new(light.pos.x(), light.pos.y(), light.pos.z()).scale(-1),
                         Vec3.zero(),
@@ -349,7 +357,7 @@ pub fn finish(self: *Render) void {
                     const near_far = Vec2.new(0.1, 10);
                     const camera_matrix = &self.shadow_matrices;
                     camera_matrix.* = .{
-                        .projection = Mat4.perspective(90, 1, near_far.x(), near_far.y()),
+                        .projection = math.perspective(90, 1, near_far.x(), near_far.y()),
                         .view = Mat4.lookAt(
                             pos,
                             pos.add(cam_dir.target),
@@ -359,6 +367,7 @@ pub fn finish(self: *Render) void {
 
                     const shadow_view_proj = camera_matrix.projection.mul(camera_matrix.view);
                     const light_frustum = math.Frustum.new(shadow_view_proj);
+                    //light.shadow_vp = shadow_view_proj;
                     light.near_far = near_far;
                     gl.uniform2f(Uniform.NearFarPlanes.value(), near_far.x(), near_far.y());
 
@@ -646,7 +655,7 @@ pub const Camera = struct {
     view_mat: Mat4 = Mat4.identity(),
 
     pub fn projection(self: *const Camera) Mat4 {
-        return Mat4.perspective(self.fovy, self.aspect, self.near, self.far);
+        return math.perspective(self.fovy, self.aspect, self.near, self.far);
     }
 };
 

@@ -170,3 +170,37 @@ pub fn checkAABBIntersectionNDC(aabb: *const AABB, mvp: *const Mat4) bool {
 
     return !(outside_left_plane or outside_right_plane or outside_bottom_plane or outside_top_plane or outside_near_plane or outside_far_plane);
 }
+
+/// Formulas from D3DXMatrixPerspectiveFovRH
+/// Maps z to [0, 1]
+pub fn perspective(fovy_in_degrees: f32, aspect_ratio: f32, z_near: f32, z_far: f32) Mat4 {
+    var result = Mat4.identity();
+
+    const f = 1 / @tan(za.toRadians(fovy_in_degrees) * 0.5);
+
+    result.data[0][0] = f / aspect_ratio;
+    result.data[1][1] = f;
+    result.data[2][2] = z_far / (z_near - z_far);
+    result.data[2][3] = -1;
+    result.data[3][2] = z_far * z_near / (z_near - z_far);
+    result.data[3][3] = 0;
+
+    return result;
+}
+
+/// Formulas from D3DXMatrixOrthoOffCenterRH
+/// Maps z to [0, 1]
+pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, z_near: f32, z_far: f32) Mat4 {
+    var result = Mat4.zero();
+
+    result.data[0][0] = 2 / (right - left);
+    result.data[1][1] = 2 / (top - bottom);
+    result.data[2][2] = 2 / (z_near - z_far);
+    result.data[3][3] = 1;
+
+    result.data[3][0] = (left + right) / (left - right);
+    result.data[3][1] = (bottom + top) / (bottom - top);
+    result.data[3][2] = z_near / (z_near - z_far);
+
+    return result;
+}

@@ -113,7 +113,7 @@ fn loadGL() void {
         @panic("gl.load");
     };
     gl.debugMessageCallback(glDebugCallback, null);
-    // gl.enable(gl.DEBUG_OUTPUT);
+    gl.enable(gl.DEBUG_OUTPUT);
     gl.enable(gl.DEBUG_OUTPUT_SYNCHRONOUS);
 }
 
