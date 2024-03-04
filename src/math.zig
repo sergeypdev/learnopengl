@@ -22,8 +22,9 @@ pub const Plane = struct {
     // x, y, z - normal, w - distance
     nd: Vec4 = Vec4.up(),
 
-    pub fn new(normal: Vec3, distance: f32) Plane {
-        return .{ .nd = normal.norm().toVec4(distance) };
+    pub fn new(normal_d: Vec4) Plane {
+        const scale = 1.0 / normal_d.toVec3().length();
+        return .{ .nd = normal_d.scale(scale) };
     }
 
     pub fn transform(self: *const Plane, matrix: *const Mat4) Plane {
@@ -80,30 +81,30 @@ pub const Frustum = struct {
     near: Plane,
     far: Plane,
 
-    // Returns a frustum in view space
-    pub fn perspective(fovy: f32, aspect: f32, z_near: f32, z_far: f32) Frustum {
-        const half_height = @tan(za.toRadians(fovy) * 0.5);
-        const half_width = half_height * aspect;
+    /// Extracts frustum planes from matrices using Gribb-Hartmann method
+    /// If you pass in a projection matrix planes will be in view space.
+    /// If you pass in a view-projection matrix planes will be in world space.
+    /// If you pass in a model-view-projection matrix planes will be in model space.
+    pub fn new(mat: Mat4) Frustum {
+        const row1 = Vec4.new(mat.data[0][0], mat.data[1][0], mat.data[2][0], mat.data[3][0]);
+        const row2 = Vec4.new(mat.data[0][1], mat.data[1][1], mat.data[2][1], mat.data[3][1]);
+        const row3 = Vec4.new(mat.data[0][2], mat.data[1][2], mat.data[2][2], mat.data[3][2]);
+        const row4 = Vec4.new(mat.data[0][3], mat.data[1][3], mat.data[2][3], mat.data[3][3]);
 
-        const nw = Vec3.new(-half_width, half_height, 1).norm();
-        const ne = Vec3.new(half_width, half_height, 1).norm();
-        const se = Vec3.new(half_width, -half_height, 1).norm();
-        const sw = Vec3.new(-half_width, -half_height, 1).norm();
-
-        const top = nw.cross(ne);
-        const right = ne.cross(se);
-        const bottom = se.cross(sw);
-        const left = sw.cross(nw);
-        const near = Vec3.new(0, 0, -1);
-        const far = Vec3.new(0, 0, 1);
+        const left = row4.add(row1);
+        const right = row4.sub(row1);
+        const bottom = row4.add(row2);
+        const top = row4.sub(row2);
+        const near = row4.add(row3);
+        const far = row4.sub(row3);
 
         return .{
-            .top = Plane.new(top, 0),
-            .right = Plane.new(right, 0),
-            .bottom = Plane.new(bottom, 0),
-            .left = Plane.new(left, 0),
-            .near = Plane.new(near, z_near),
-            .far = Plane.new(far, -z_far),
+            .top = Plane.new(top),
+            .right = Plane.new(right),
+            .bottom = Plane.new(bottom),
+            .left = Plane.new(left),
+            .near = Plane.new(near),
+            .far = Plane.new(far),
         };
     }
 
@@ -123,13 +124,24 @@ pub const Frustum = struct {
     }
 
     pub fn intersectAABB(self: *const Frustum, aabb: AABB) bool {
+        var outside_top_plane = true;
+        var outside_bottom_plane = true;
+        var outside_left_plane = true;
+        var outside_right_plane = true;
+        var outside_near_plane = true;
+        var outside_far_plane = true;
         inline for (box_corners) |corner| {
-            if (self.intersectPoint(aabb.origin.add(aabb.extents.mul(corner)))) {
-                return true;
-            }
+            const p = aabb.origin.add(aabb.extents.mul(corner));
+
+            outside_top_plane = outside_top_plane and self.top.isUnder(p);
+            outside_bottom_plane = outside_bottom_plane and self.bottom.isUnder(p);
+            outside_left_plane = outside_left_plane and self.left.isUnder(p);
+            outside_right_plane = outside_right_plane and self.right.isUnder(p);
+            outside_near_plane = outside_near_plane and self.near.isUnder(p);
+            outside_far_plane = outside_far_plane and self.far.isUnder(p);
         }
 
-        return false;
+        return !(outside_left_plane or outside_right_plane or outside_bottom_plane or outside_top_plane or outside_near_plane or outside_far_plane);
     }
 };
 

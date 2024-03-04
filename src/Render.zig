@@ -405,23 +405,15 @@ pub fn finish(self: *Render) void {
     gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
     gl.bindVertexArray(self.mesh_vao);
 
-    //const inv_view_mat = self.camera.view_mat.inv();
-    // const world_camera_frustum = math.Frustum.perspective(
-    //     self.camera.fovy,
-    //     self.camera.aspect,
-    //     self.camera.near,
-    //     self.camera.far,
-    // ).transform(&inv_view_mat);
-
     const view_proj = projection.mul(self.camera.view_mat);
+    const world_camera_frustum = math.Frustum.new(view_proj);
 
     var rendered_count: usize = 0;
     for (self.command_buffer[0..self.command_count]) |*cmd| {
         const mesh = self.assetman.resolveMesh(cmd.mesh);
         const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
 
-        const mvp = view_proj.mul(cmd.transform);
-        if (!math.checkAABBIntersectionNDC(&aabb, &mvp)) {
+        if (!world_camera_frustum.intersectAABB(aabb.transform(cmd.transform))) {
             continue;
         }
         rendered_count += 1;

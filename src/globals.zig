@@ -65,14 +65,13 @@ pub const FreeLookCamera = struct {
         self.yaw += look.x();
         self.pitch += look.y();
         // First rotate pitch, then yaw
-        const rot = Mat4.fromRotation(self.pitch, Vec3.left()).mul(Mat4.fromRotation(self.yaw, Vec3.up()));
+        const rot = Mat4.fromRotation(self.pitch, Vec3.right()).mul(Mat4.fromRotation(self.yaw, Vec3.up()));
 
-        // First 3 of transform matrix are: right, up, forward
-        const left = Vec3.new(rot.data[0][0], rot.data[1][0], rot.data[2][0]);
+        const right = Vec3.new(rot.data[0][0], rot.data[1][0], rot.data[2][0]);
         const up = Vec3.new(rot.data[0][1], rot.data[1][1], rot.data[2][1]);
-        const forward = Vec3.new(rot.data[0][2], rot.data[1][2], rot.data[2][2]);
+        const forward = Vec3.new(-rot.data[0][2], -rot.data[1][2], -rot.data[2][2]);
 
-        const movement = left.scale(-move.x()).add(forward.scale(move.y())).add(up.scale(move.z()));
+        const movement = right.scale(move.x()).add(forward.scale(move.y())).add(up.scale(move.z()));
 
         self.pos = self.pos.add(movement.scale(self.move_speed * dt));
 
