@@ -24,8 +24,8 @@
             .hash = "12209b95f2f5a85107ed38814143179f1e7516440704fb94004046d6f5b5ed3c8667",
         },
         .zalgebra = .{
-            .url = "https://github.com/sergeypdev/zalgebra/tarball/232ff76712dc7cc270b6c48cedc84617536f3a59",
-            .hash = "12206e29e5d0f012c694f413b21cb66238964fdaef0a29781e0bf3ff75ec08a2ed78",
+            .url = "https://github.com/sergeypdev/zalgebra/tarball/f6aa18f74b8935887595d5793d73181d44a80735",
+            .hash = "1220fb0aa4a9e27e1e74c94072827e21114609b7122d4038e30aa9e4f66f6c6fc00d",
         },
     },
     .paths = .{

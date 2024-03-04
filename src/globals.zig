@@ -54,7 +54,7 @@ pub const InputState = packed struct {
 };
 
 pub const FreeLookCamera = struct {
-    pos: Vec3 = Vec3.new(0, 0, -1),
+    pos: Vec3 = Vec3.new(0, 0, 1),
     pitch: f32 = 0,
     yaw: f32 = 0,
     move_speed: f32 = 0.5,

@@ -5,6 +5,7 @@ const AssetManager = @import("AssetManager.zig");
 const a = @import("asset_manifest");
 const globals = @import("globals.zig");
 pub const Material = @import("formats.zig").Material;
+const math = @import("math.zig");
 
 const za = @import("zalgebra");
 const Vec2 = za.Vec2;
@@ -381,11 +382,12 @@ pub fn finish(self: *Render) void {
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
+    const projection = self.camera.projection();
+
     {
         const camera_matrix: *CameraMatrices = @alignCast(@ptrCast(self.camera_matrices[self.tripple_buffer_index * self.uboAlignedSizeOf(CameraMatrices) ..].ptr));
-
         camera_matrix.* = .{
-            .projection = self.camera.projection(),
+            .projection = projection,
             .view = self.camera.view_mat,
         };
 
@@ -403,8 +405,26 @@ pub fn finish(self: *Render) void {
     gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
     gl.bindVertexArray(self.mesh_vao);
 
+    //const inv_view_mat = self.camera.view_mat.inv();
+    // const world_camera_frustum = math.Frustum.perspective(
+    //     self.camera.fovy,
+    //     self.camera.aspect,
+    //     self.camera.near,
+    //     self.camera.far,
+    // ).transform(&inv_view_mat);
+
+    const view_proj = projection.mul(self.camera.view_mat);
+
+    var rendered_count: usize = 0;
     for (self.command_buffer[0..self.command_count]) |*cmd| {
         const mesh = self.assetman.resolveMesh(cmd.mesh);
+        const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
+
+        const mvp = view_proj.mul(cmd.transform);
+        if (!math.checkAABBIntersectionNDC(&aabb, &mvp)) {
+            continue;
+        }
+        rendered_count += 1;
 
         const material: Material = if (cmd.material_override) |mat| mat else mesh.material;
 
@@ -472,6 +492,8 @@ pub fn finish(self: *Render) void {
             @ptrFromInt(mesh.indices.offset),
         );
     }
+
+    std.log.debug("Total draws {}, frustum culled draws {}\n", .{ self.command_count, rendered_count });
 
     self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     c.SDL_GL_SwapWindow(ginit.window);
