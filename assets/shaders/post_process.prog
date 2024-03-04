@@ -1,0 +1,6 @@
+
+{
+  "shader": "post_process.glsl",
+  "vertex": true,
+  "fragment": true
+}

@@ -13,6 +13,7 @@ const Vec3 = za.Vec3;
 const Vec4 = za.Vec4;
 const Mat4 = za.Mat4;
 const Quat = za.Quat;
+const Vec2_i32 = za.Vec2_i32;
 
 pub const MAX_FRAMES_QUEUED = 3;
 pub const MAX_POINT_LIGHTS = 8;
@@ -45,6 +46,15 @@ shadow_matrices: CameraMatrices = .{},
 cube_shadow_texture_array: gl.GLuint = 0,
 cube_shadow_texture_handle: gl.GLuint64 = 0,
 cube_shadow_framebuffer: gl.GLuint = 0,
+
+// Destination for all 3d rendering
+screen_color_texture: gl.GLuint = 0,
+screen_depth_texture: gl.GLuint = 0,
+screen_fbo: gl.GLuint = 0,
+screen_tex_size: Vec2_i32 = Vec2_i32.zero(),
+
+// VAO for post processing shaders
+post_process_vao: gl.GLuint = 0,
 
 pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetman: *AssetManager) Render {
     var render = Render{
@@ -237,7 +247,63 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         gl.vertexArrayAttribFormat(vao, Attrib.Position.value(), 3, gl.FLOAT, gl.FALSE, 0);
     }
 
+    // Screen HDR FBO
+    {
+        gl.createFramebuffers(1, &render.screen_fbo);
+        std.debug.assert(render.screen_fbo != 0);
+
+        var width: c_int = 0;
+        var height: c_int = 0;
+        c.SDL_GL_GetDrawableSize(globals.g_init.window, &width, &height);
+
+        var textures = [2]gl.GLuint{ 0, 0 };
+        gl.createTextures(gl.TEXTURE_2D, textures.len, &textures);
+        render.screen_color_texture = textures[0];
+        render.screen_depth_texture = textures[1];
+
+        std.debug.assert(render.screen_color_texture != 0);
+        std.debug.assert(render.screen_depth_texture != 0);
+
+        // These will always match output framebuffer size, so no interpolation required
+        gl.textureParameteri(render.screen_color_texture, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.textureParameteri(render.screen_color_texture, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+        render.updateScreenBufferSize(width, height);
+    }
+
+    // Post process VAO
+    {
+        gl.createVertexArrays(1, &render.post_process_vao);
+        std.debug.assert(render.post_process_vao != 0);
+        const vao = render.post_process_vao;
+
+        // positions
+        gl.enableVertexArrayAttrib(vao, Attrib.Position.value());
+        gl.vertexArrayAttribBinding(vao, Attrib.Position.value(), 0);
+        gl.vertexArrayAttribFormat(vao, Attrib.Position.value(), 3, gl.FLOAT, gl.FALSE, 0);
+    }
+
     return render;
+}
+
+fn updateScreenBufferSize(self: *Render, width: c_int, height: c_int) void {
+    gl.bindTexture(gl.TEXTURE_2D, self.screen_color_texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB16F, width, height, 0, gl.RGB, gl.HALF_FLOAT, null);
+    checkGLError();
+
+    gl.bindTexture(gl.TEXTURE_2D, self.screen_depth_texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT32F, width, height, 0, gl.DEPTH_COMPONENT, gl.FLOAT, null);
+    checkGLError();
+
+    gl.namedFramebufferTexture(self.screen_fbo, gl.COLOR_ATTACHMENT0, self.screen_color_texture, 0);
+    gl.namedFramebufferTexture(self.screen_fbo, gl.DEPTH_ATTACHMENT, self.screen_depth_texture, 0);
+
+    if (gl.checkNamedFramebufferStatus(self.screen_fbo, gl.DRAW_FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE) {
+        checkGLError();
+        @panic("Framebuffer incomplete");
+    }
+
+    self.screen_tex_size = Vec2_i32.new(width, height);
 }
 
 pub fn begin(self: *Render) void {
@@ -392,7 +458,12 @@ pub fn finish(self: *Render) void {
     var height: c_int = 0;
     c.SDL_GL_GetDrawableSize(globals.g_init.window, &width, &height);
 
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, 0);
+    if (width != self.screen_tex_size.x() or height != self.screen_tex_size.y()) {
+        self.updateScreenBufferSize(width, height);
+    }
+
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, self.screen_fbo);
+
     gl.viewport(0, 0, width, height);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -501,6 +572,29 @@ pub fn finish(self: *Render) void {
     }
 
     //std.log.debug("Total draws {}, frustum culled draws {}\n", .{ self.command_count, rendered_count });
+
+    // Post processing pass
+    {
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, 0);
+        gl.clear(gl.DEPTH_BUFFER_BIT | gl.COLOR_BUFFER_BIT);
+
+        gl.disable(gl.DEPTH_TEST);
+        gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.post_process).program);
+        gl.bindVertexArray(self.post_process_vao);
+
+        gl.bindTextureUnit(0, self.screen_color_texture);
+
+        const mesh = self.assetman.resolveMesh(a.Meshes.quad.Plane);
+
+        mesh.positions.bind(Render.Attrib.Position.value());
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
+        gl.drawElements(
+            gl.TRIANGLES,
+            mesh.indices.count,
+            mesh.indices.type,
+            @ptrFromInt(mesh.indices.offset),
+        );
+    }
 
     self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     c.SDL_GL_SwapWindow(ginit.window);
