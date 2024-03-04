@@ -318,7 +318,10 @@ pub fn finish(self: *Render) void {
                         Vec3.up(),
                     ),
                 };
-                light.shadow_vp = camera_matrix.projection.mul(camera_matrix.view);
+
+                const shadow_view_proj = camera_matrix.projection.mul(camera_matrix.view);
+                const light_frustum = math.Frustum.new(shadow_view_proj);
+                light.shadow_vp = shadow_view_proj;
 
                 gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(&self.shadow_matrices));
                 checkGLError();
@@ -326,7 +329,7 @@ pub fn finish(self: *Render) void {
                 gl.clear(gl.DEPTH_BUFFER_BIT);
                 gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
 
-                self.renderShadow();
+                self.renderShadow(&light_frustum);
             } else {
                 // Point Light
                 gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.cube_shadow).program);
@@ -353,6 +356,9 @@ pub fn finish(self: *Render) void {
                             cam_dir.up,
                         ),
                     };
+
+                    const shadow_view_proj = camera_matrix.projection.mul(camera_matrix.view);
+                    const light_frustum = math.Frustum.new(shadow_view_proj);
                     light.near_far = near_far;
                     gl.uniform2f(Uniform.NearFarPlanes.value(), near_far.x(), near_far.y());
 
@@ -362,7 +368,7 @@ pub fn finish(self: *Render) void {
                     gl.clear(gl.DEPTH_BUFFER_BIT);
                     gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
 
-                    self.renderShadow();
+                    self.renderShadow(&light_frustum);
                 }
             }
         }
@@ -485,7 +491,7 @@ pub fn finish(self: *Render) void {
         );
     }
 
-    std.log.debug("Total draws {}, frustum culled draws {}\n", .{ self.command_count, rendered_count });
+    //std.log.debug("Total draws {}, frustum culled draws {}\n", .{ self.command_count, rendered_count });
 
     self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     c.SDL_GL_SwapWindow(ginit.window);
@@ -531,9 +537,14 @@ const cube_camera_dirs = [6]CubeCameraDir{
     },
 };
 
-fn renderShadow(self: *Render) void {
+fn renderShadow(self: *Render, frustum: *const math.Frustum) void {
     for (self.command_buffer[0..self.command_count]) |*cmd| {
         const mesh = self.assetman.resolveMesh(cmd.mesh);
+        const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
+
+        if (!frustum.intersectAABB(aabb.transform(cmd.transform))) {
+            continue;
+        }
 
         gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&cmd.transform.data));
         mesh.positions.bind(Render.Attrib.Position.value());
