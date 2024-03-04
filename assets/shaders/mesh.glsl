@@ -188,7 +188,7 @@ vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
   float normal_offset_scale = clamp(1 - NDotL, 0, 1);
   normal_offset_scale *= 10; // constant
 
-  float constant_bias = 0.001;
+  float constant_bias = 0.003;
   float shadow_mult = 1;
   vec4 shadow_offset = vec4(VertexOut.wNormal * normal_offset_scale, 0);
   if (point == 1) {
