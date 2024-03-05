@@ -374,7 +374,7 @@ pub const Material = extern struct {
     metallic_map: Handle.Texture = .{},
     roughness: f32 = 1,
     roughness_map: Handle.Texture = .{},
-    emission: f32 = 0,
+    emission: Vec3 = Vec3.zero(),
     emission_map: Handle.Texture = .{},
 
     pub fn fromBuffer(buf: []const u8) Material {

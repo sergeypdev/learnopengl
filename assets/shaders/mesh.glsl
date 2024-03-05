@@ -119,16 +119,18 @@ vec3 schlickFresnel(Material mat, float LDotH) {
   return f0 + (1 - f0) * pow(1.0 - LDotH, 5);
 }
 
+const float eps = 0.0000001;
+
 float geomSmith(Material mat, float DotVal) {
   float k = (mat.roughness + 1.0) * (mat.roughness + 1.0) / 8.0;
   float denom = DotVal * (1 - k) + k;
-  return 1.0 / denom;
+  return 1.0 / max(denom, eps);
 }
 
 float ggxDistribution(Material mat, float NDotH) {
   float alpha2 = mat.roughness * mat.roughness * mat.roughness * mat.roughness;
   float d = (NDotH * NDotH) * (alpha2 - 1) + 1;
-  return alpha2 / (PI * d * d);
+  return alpha2 / max((PI * d * d), eps);
 }
 
 float lightAttenuation(float point, float dist, float radius) {
@@ -162,9 +164,9 @@ vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
   // 0 - means directional, 1 - means point light
   float point = light.vPos.w;
   vec3 lightI = light.color.rgb;
-  float lightRadius = light.color.a;
+  float lightRadius = max(light.color.a, eps);
   vec3 L = mix(-light.vPos.xyz, light.vPos.xyz - P, light.vPos.w);
-  float dist = length(L);
+  float dist = max(length(L), eps);
   L /= dist;
 
   // TODO: I think this is uniform control flow
@@ -242,7 +244,7 @@ vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
 
   vec3 specBrdf = 0.25 * ggxDistribution(mat, NDotH) * schlickFresnel(mat, LDotH) * geomSmith(mat, NDotL) * geomSmith(mat, NDotV);
 
-  return (diffuseBrdf + PI * specBrdf) * lightI * NDotL * shadow_mult;
+  return (diffuseBrdf + PI * specBrdf) * lightI * NDotL * shadow_mult + mat.emission;
 }
 
 void main() {

@@ -1,0 +1,6 @@
+
+{
+  "shader": "bloom_upsample.glsl",
+  "vertex": true,
+  "fragment": true
+}

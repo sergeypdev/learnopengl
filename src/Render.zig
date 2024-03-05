@@ -52,9 +52,13 @@ screen_color_texture: gl.GLuint = 0,
 screen_depth_texture: gl.GLuint = 0,
 screen_fbo: gl.GLuint = 0,
 screen_tex_size: Vec2_i32 = Vec2_i32.zero(),
+screen_mip_count: usize = 1,
 
 // VAO for post processing shaders
 post_process_vao: gl.GLuint = 0,
+
+// Bloom
+screen_bloom_sampler: gl.GLuint = 0,
 
 pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetman: *AssetManager) Render {
     var render = Render{
@@ -264,11 +268,30 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         std.debug.assert(render.screen_color_texture != 0);
         std.debug.assert(render.screen_depth_texture != 0);
 
-        // These will always match output framebuffer size, so no interpolation required
+        gl.textureParameteri(render.screen_color_texture, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.textureParameteri(render.screen_color_texture, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.textureParameteri(render.screen_color_texture, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.textureParameteri(render.screen_color_texture, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+        gl.textureParameteri(render.screen_depth_texture, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.textureParameteri(render.screen_depth_texture, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.textureParameteri(render.screen_depth_texture, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.textureParameteri(render.screen_depth_texture, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
         render.updateScreenBufferSize(width, height);
+    }
+
+    // Bloom screen sampler
+    {
+        var sampler: gl.GLuint = 0;
+        gl.createSamplers(1, &sampler);
+        std.debug.assert(sampler != 0);
+        render.screen_bloom_sampler = sampler;
+
+        gl.samplerParameteri(sampler, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+        gl.samplerParameteri(sampler, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.samplerParameteri(sampler, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.samplerParameteri(sampler, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     }
 
     // Post process VAO
@@ -286,24 +309,39 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
     return render;
 }
 
-fn updateScreenBufferSize(self: *Render, width: c_int, height: c_int) void {
-    gl.bindTexture(gl.TEXTURE_2D, self.screen_color_texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB16F, width, height, 0, gl.RGB, gl.HALF_FLOAT, null);
-    checkGLError();
+fn getMipSize(width: i32, height: i32, mip_level: usize) Vec2_i32 {
+    if (mip_level == 0) return Vec2_i32.new(width, height);
+    const denom = std.math.pow(f32, 2, @floatFromInt(mip_level));
+    var mip_width: c_int = @intFromFloat(@as(f32, @floatFromInt(width)) / denom);
+    var mip_height: c_int = @intFromFloat(@as(f32, @floatFromInt(height)) / denom);
+    mip_width = @max(mip_width, 1);
+    mip_height = @max(mip_height, 1);
 
+    return Vec2_i32.new(mip_width, mip_height);
+}
+
+fn updateScreenBufferSize(self: *Render, width: c_int, height: c_int) void {
+    const mip_count = 1 + @as(
+        u32,
+        @intFromFloat(@log2(@as(f32, @floatFromInt(@max(width, height))))),
+    );
+
+    gl.bindTexture(gl.TEXTURE_2D, self.screen_color_texture);
+    for (0..mip_count) |mip_level| {
+        const size = getMipSize(width, height, mip_level);
+        std.log.debug("screen_color mip {} size {}x{}\n", .{ mip_level, size.x(), size.y() });
+
+        gl.texImage2D(gl.TEXTURE_2D, @intCast(mip_level), gl.RGB16F, size.x(), size.y(), 0, gl.RGB, gl.HALF_FLOAT, null);
+        checkGLError();
+    }
+
+    // Depth doesn't need any mips cause it's not filterable anyway
     gl.bindTexture(gl.TEXTURE_2D, self.screen_depth_texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT32F, width, height, 0, gl.DEPTH_COMPONENT, gl.FLOAT, null);
     checkGLError();
 
-    gl.namedFramebufferTexture(self.screen_fbo, gl.COLOR_ATTACHMENT0, self.screen_color_texture, 0);
-    gl.namedFramebufferTexture(self.screen_fbo, gl.DEPTH_ATTACHMENT, self.screen_depth_texture, 0);
-
-    if (gl.checkNamedFramebufferStatus(self.screen_fbo, gl.DRAW_FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE) {
-        checkGLError();
-        @panic("Framebuffer incomplete");
-    }
-
     self.screen_tex_size = Vec2_i32.new(width, height);
+    self.screen_mip_count = mip_count;
 }
 
 pub fn begin(self: *Render) void {
@@ -462,6 +500,14 @@ pub fn finish(self: *Render) void {
         self.updateScreenBufferSize(width, height);
     }
 
+    gl.namedFramebufferTexture(self.screen_fbo, gl.COLOR_ATTACHMENT0, self.screen_color_texture, 0);
+    gl.namedFramebufferTexture(self.screen_fbo, gl.DEPTH_ATTACHMENT, self.screen_depth_texture, 0);
+
+    if (gl.checkNamedFramebufferStatus(self.screen_fbo, gl.DRAW_FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE) {
+        checkGLError();
+        @panic("Framebuffer incomplete");
+    }
+
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, self.screen_fbo);
 
     gl.viewport(0, 0, width, height);
@@ -546,7 +592,7 @@ pub fn finish(self: *Render) void {
             gl.uniform2fv(Uniform.RoughnessMapUVScale.value(), 1, @ptrCast(&roughness_map.uv_scale.data));
         }
         {
-            gl.uniform1fv(Uniform.Emission.value(), 1, &material.emission);
+            gl.uniform3fv(Uniform.Emission.value(), 1, @ptrCast(&material.emission.data));
 
             const emission_map = self.assetman.resolveTexture(material.emission_map);
             gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
@@ -573,32 +619,93 @@ pub fn finish(self: *Render) void {
 
     //std.log.debug("Total draws {}, frustum culled draws {}\n", .{ self.command_count, rendered_count });
 
-    // Post processing pass
-    {
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, 0);
-        gl.clear(gl.DEPTH_BUFFER_BIT | gl.COLOR_BUFFER_BIT);
+    gl.disable(gl.DEPTH_TEST);
+    gl.bindVertexArray(self.post_process_vao); // shared for all post process shaders
 
-        gl.disable(gl.DEPTH_TEST);
-        gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.post_process).program);
-        gl.bindVertexArray(self.post_process_vao);
+    const quad = self.assetman.resolveMesh(a.Meshes.quad.Plane);
+    // Bind quad
+    {
+        quad.positions.bind(Render.Attrib.Position.value());
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, quad.indices.buffer);
+    }
+
+    // Bloom pass
+    {
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, self.screen_fbo);
 
         gl.bindTextureUnit(0, self.screen_color_texture);
+        gl.bindSampler(0, self.screen_bloom_sampler);
+        defer gl.bindSampler(0, 0);
 
-        const mesh = self.assetman.resolveMesh(a.Meshes.quad.Plane);
+        // Downsample and filter
+        {
+            gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.bloom_downsample).program);
 
-        mesh.positions.bind(Render.Attrib.Position.value());
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
+            for (1..self.screen_mip_count) |dst_mip_level| {
+                const src_mip_level = dst_mip_level - 1;
+                gl.namedFramebufferTexture(self.screen_fbo, gl.COLOR_ATTACHMENT0, self.screen_color_texture, @intCast(dst_mip_level));
+                const size = getMipSize(self.screen_tex_size.x(), self.screen_tex_size.y(), dst_mip_level);
+                gl.viewport(0, 0, size.x(), size.y());
+                gl.uniform1i(Uniform.SRCMipLevel.value(), @intCast(src_mip_level));
+
+                gl.drawElements(
+                    gl.TRIANGLES,
+                    quad.indices.count,
+                    quad.indices.type,
+                    @ptrFromInt(quad.indices.offset),
+                );
+            }
+        }
+
+        // Upsample
+        {
+            gl.enable(gl.BLEND);
+            defer gl.disable(gl.BLEND);
+            gl.blendFunc(gl.ONE, gl.ONE);
+
+            gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.bloom_upsample).program);
+
+            var src_mip_level = self.screen_mip_count - 1;
+            while (src_mip_level > 0) : (src_mip_level -= 1) {
+                const dst_mip_level = src_mip_level - 1;
+                gl.namedFramebufferTexture(self.screen_fbo, gl.COLOR_ATTACHMENT0, self.screen_color_texture, @intCast(dst_mip_level));
+                const size = getMipSize(self.screen_tex_size.x(), self.screen_tex_size.y(), dst_mip_level);
+                gl.viewport(0, 0, size.x(), size.y());
+                gl.uniform1i(Uniform.SRCMipLevel.value(), @intCast(src_mip_level));
+                gl.uniform1f(Uniform.BloomStrength.value(), if (dst_mip_level == 0) 0.04 else 1);
+
+                gl.drawElements(
+                    gl.TRIANGLES,
+                    quad.indices.count,
+                    quad.indices.type,
+                    @ptrFromInt(quad.indices.offset),
+                );
+            }
+        }
+    }
+
+    // Final post processing pass
+    {
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, 0);
+        //gl.clear(gl.DEPTH_BUFFER_BIT | gl.COLOR_BUFFER_BIT);
+        gl.viewport(0, 0, width, height);
+
+        gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.post_process).program);
+
+        gl.bindTextureUnit(0, self.screen_color_texture);
+        defer gl.bindTextureUnit(0, 0);
+
         gl.drawElements(
             gl.TRIANGLES,
-            mesh.indices.count,
-            mesh.indices.type,
-            @ptrFromInt(mesh.indices.offset),
+            quad.indices.count,
+            quad.indices.type,
+            @ptrFromInt(quad.indices.offset),
         );
     }
 
     self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     c.SDL_GL_SwapWindow(ginit.window);
-    c.SDL_Delay(1);
+    //c.SDL_Delay(1);
 }
 
 const CubeCameraDir = struct {
@@ -733,6 +840,10 @@ pub const Uniform = enum(gl.GLint) {
     ShadowMapCube = 17,
 
     NearFarPlanes = 18, // vec2 stores near and far planes for perspective projection
+
+    // Bloom
+    SRCMipLevel = 19,
+    BloomStrength = 20,
 
     pub inline fn value(self: Uniform) gl.GLint {
         return @intFromEnum(self);

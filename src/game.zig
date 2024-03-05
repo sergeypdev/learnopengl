@@ -113,8 +113,8 @@ fn loadGL() void {
         @panic("gl.load");
     };
     gl.debugMessageCallback(glDebugCallback, null);
-    gl.enable(gl.DEBUG_OUTPUT);
-    gl.enable(gl.DEBUG_OUTPUT_SYNCHRONOUS);
+    //gl.enable(gl.DEBUG_OUTPUT);
+    //gl.enable(gl.DEBUG_OUTPUT_SYNCHRONOUS);
 }
 
 fn glDebugCallback(source: gl.GLenum, _type: gl.GLenum, id: gl.GLuint, severity: gl.GLenum, length: gl.GLsizei, message: [*:0]const u8, userParam: ?*anyopaque) callconv(.C) void {
@@ -486,7 +486,7 @@ export fn game_update() bool {
                 } else if (ent.data.flags.point_light) {
                     gmem.render.draw(.{
                         .mesh = a.Meshes.sphere.Icosphere,
-                        .material_override = .{ .albedo = ent.data.light.premultipliedColor() },
+                        .material_override = .{ .albedo = Vec3.zero(), .emission = ent.data.light.premultipliedColor() },
                         .transform = ent.globalMatrix(&gmem.world).*,
                     });
                 }
