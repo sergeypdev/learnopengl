@@ -16,8 +16,9 @@ const Quat = za.Quat;
 const Vec2_i32 = za.Vec2_i32;
 
 pub const MAX_FRAMES_QUEUED = 3;
-pub const MAX_POINT_LIGHTS = 8;
+pub const MAX_LIGHTS = 8;
 pub const MAX_DRAW_COMMANDS = 4096;
+pub const MAX_LIGHT_COMMANDS = 2048;
 
 pub const Render = @This();
 
@@ -33,7 +34,9 @@ gl_fences: [MAX_FRAMES_QUEUED]?gl.GLsync = [_]?gl.GLsync{null} ** MAX_FRAMES_QUE
 camera_ubo: gl.GLuint = 0,
 camera_matrices: []u8 = &.{},
 point_lights_ubo: gl.GLuint = 0,
-point_lights: []u8 = &.{},
+point_lights: []u8 = &.{}, // TODO: remove
+lights: [MAX_LIGHT_COMMANDS]LightCommand = undefined,
+light_count: usize = 0,
 command_buffer: [MAX_DRAW_COMMANDS]DrawCommand = undefined,
 command_count: usize = 0,
 ubo_align: usize = 0,
@@ -136,7 +139,7 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         gl.createBuffers(1, &render.point_lights_ubo);
         std.debug.assert(render.camera_ubo != 0);
 
-        const buf_size = render.uboAlignedSizeOf(PointLightArray) * MAX_FRAMES_QUEUED;
+        const buf_size = render.uboAlignedSizeOf(LightArray) * MAX_FRAMES_QUEUED;
         gl.namedBufferStorage(
             render.point_lights_ubo,
             @intCast(buf_size),
@@ -193,7 +196,7 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
             checkGLError();
             std.debug.assert(render.cube_shadow_texture_array != 0);
 
-            gl.textureStorage3D(render.cube_shadow_texture_array, 1, gl.DEPTH_COMPONENT16, 512, 512, MAX_POINT_LIGHTS * 6);
+            gl.textureStorage3D(render.cube_shadow_texture_array, 1, gl.DEPTH_COMPONENT16, 512, 512, MAX_LIGHTS * 6);
             checkGLError();
 
             gl.textureParameteri(render.cube_shadow_texture_array, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
@@ -346,6 +349,7 @@ fn updateScreenBufferSize(self: *Render, width: c_int, height: c_int) void {
 
 pub fn begin(self: *Render) void {
     self.command_count = 0;
+    self.light_count = 0;
     self.tripple_buffer_index = (self.tripple_buffer_index + 1) % MAX_FRAMES_QUEUED;
 
     gl.enable(gl.CULL_FACE);
@@ -375,10 +379,11 @@ pub fn begin(self: *Render) void {
     }
 }
 
-pub fn getPointLights(self: *Render) *PointLightArray {
-    return @alignCast(@ptrCast(self.point_lights[self.tripple_buffer_index * self.uboAlignedSizeOf(PointLightArray) ..].ptr));
+fn getLightBuffer(self: *Render) *LightArray {
+    return @alignCast(@ptrCast(self.point_lights[self.tripple_buffer_index * self.uboAlignedSizeOf(LightArray) ..].ptr));
 }
 
+// TODO: get rid of this
 pub fn flushUBOs(self: *Render) void {
     const idx = self.tripple_buffer_index;
 
@@ -387,10 +392,35 @@ pub fn flushUBOs(self: *Render) void {
         gl.UNIFORM_BUFFER,
         UBO.PointLights.value(),
         self.point_lights_ubo,
-        idx * self.uboAlignedSizeOf(PointLightArray),
-        @intCast(self.uboAlignedSizeOf(PointLightArray)),
+        idx * self.uboAlignedSizeOf(LightArray),
+        @intCast(self.uboAlignedSizeOf(LightArray)),
     );
     checkGLError();
+}
+
+pub const LightKind = enum {
+    directional,
+    point,
+    // Spot, // TODO
+};
+
+pub const PointLight = struct {
+    color: Vec3,
+    pos: Vec3,
+    radius: f32,
+};
+
+pub const LightCommand = union(LightKind) {
+    directional: struct {
+        color: Vec3,
+        dir: Vec3,
+    },
+    point: PointLight,
+};
+
+pub fn drawLight(self: *Render, cmd: LightCommand) void {
+    self.lights[self.light_count] = cmd;
+    self.light_count += 1;
 }
 
 pub fn draw(self: *Render, cmd: DrawCommand) void {
@@ -401,79 +431,64 @@ pub fn draw(self: *Render, cmd: DrawCommand) void {
 pub fn finish(self: *Render) void {
     const ginit = globals.g_init;
 
-    const lights = self.getPointLights();
+    const lights = self.lights[0..self.light_count];
+
+    // Sort lights: directional first
+    {
+        std.mem.sortUnstable(LightCommand, lights, {}, struct {
+            pub fn lessThan(_: void, lhs: LightCommand, rhs: LightCommand) bool {
+                _ = rhs; // autofix
+                return switch (lhs) {
+                    .directional => true,
+                    .point => false,
+                };
+            }
+        }.lessThan);
+    }
+
+    const lights_buf = self.getLightBuffer();
+    lights_buf.count = 0;
 
     // Light shadow maps
     {
         gl.bindVertexArray(self.shadow_vao);
-
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, self.shadow_framebuffer);
 
-        for (lights.lights[0..lights.count], 0..) |*light, i| {
-            gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.shadow).program);
-            // Directional light
-            if (std.math.approxEqAbs(f32, light.pos.w(), 0, std.math.floatEps(f32))) {
-                gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.shadow_texture_array, 0, 0);
-                const check_fbo_status = gl.checkNamedFramebufferStatus(self.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
-                if (check_fbo_status != gl.FRAMEBUFFER_COMPLETE) {
-                    std.log.debug("Shadow Framebuffer Incomplete: {}\n", .{check_fbo_status});
-                }
+        var finished_dir_lights = false;
+        gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.shadow).program);
 
-                gl.viewport(0, 0, 2048, 2048);
+        for (lights) |light_cmd| {
+            const i = lights_buf.count;
+            if (i == lights_buf.lights.len) break;
 
-                const camera_matrix = &self.shadow_matrices;
-                camera_matrix.* = .{
-                    .projection = math.orthographic(-4, 4, -4, 4, -5, 5),
-                    .view = Mat4.lookAt(
-                        Vec3.new(light.pos.x(), light.pos.y(), light.pos.z()).scale(-1),
-                        Vec3.zero(),
-                        Vec3.up(),
-                    ),
-                };
+            const light = &lights_buf.lights[i];
+            lights_buf.count += 1;
 
-                const shadow_view_proj = camera_matrix.projection.mul(camera_matrix.view);
-                const light_frustum = math.Frustum.new(shadow_view_proj);
-                light.shadow_vp = shadow_view_proj;
-
-                gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(&self.shadow_matrices));
-                checkGLError();
-
-                gl.clear(gl.DEPTH_BUFFER_BIT);
-                gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
-
-                self.renderShadow(&light_frustum);
-            } else {
-                // Point Light
-                gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.cube_shadow).program);
-
-                const pos = Vec3.new(light.pos.x(), light.pos.y(), light.pos.z());
-                light.shadow_vp = Mat4.fromTranslate(pos.negate());
-                // For each cube face
-                for (cube_camera_dirs, 0..) |cam_dir, face| {
-                    gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.cube_shadow_texture_array, 0, @intCast(i * 6 + face));
+            switch (light_cmd) {
+                .directional => |dir_light| {
+                    light.pos = dir_light.dir.toVec4(0);
+                    light.color_radius = dir_light.color.toVec4(0);
+                    gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.shadow_texture_array, 0, 0);
                     const check_fbo_status = gl.checkNamedFramebufferStatus(self.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
                     if (check_fbo_status != gl.FRAMEBUFFER_COMPLETE) {
                         std.log.debug("Shadow Framebuffer Incomplete: {}\n", .{check_fbo_status});
                     }
 
-                    gl.viewport(0, 0, 512, 512);
+                    gl.viewport(0, 0, 2048, 2048);
 
-                    const near_far = Vec2.new(0.1, 10);
                     const camera_matrix = &self.shadow_matrices;
                     camera_matrix.* = .{
-                        .projection = math.perspective(90, 1, near_far.x(), near_far.y()),
+                        .projection = math.orthographic(-4, 4, -4, 4, -5, 5),
                         .view = Mat4.lookAt(
-                            pos,
-                            pos.add(cam_dir.target),
-                            cam_dir.up,
+                            dir_light.dir.scale(-1),
+                            Vec3.zero(),
+                            Vec3.up(),
                         ),
                     };
 
                     const shadow_view_proj = camera_matrix.projection.mul(camera_matrix.view);
                     const light_frustum = math.Frustum.new(shadow_view_proj);
-                    //light.shadow_vp = shadow_view_proj;
-                    light.near_far = near_far;
-                    gl.uniform2f(Uniform.NearFarPlanes.value(), near_far.x(), near_far.y());
+                    light.shadow_vp = shadow_view_proj;
 
                     gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(&self.shadow_matrices));
                     checkGLError();
@@ -482,13 +497,62 @@ pub fn finish(self: *Render) void {
                     gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
 
                     self.renderShadow(&light_frustum);
-                }
+                },
+                .point => |point_light| {
+                    if (!finished_dir_lights) {
+                        finished_dir_lights = true;
+                        gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.cube_shadow).program);
+                    }
+
+                    const pos = point_light.pos;
+                    light.pos = pos.toVec4(1);
+                    light.color_radius = point_light.color.toVec4(point_light.radius);
+
+                    light.shadow_vp = Mat4.fromTranslate(pos.negate());
+                    // For each cube face
+                    for (cube_camera_dirs, 0..) |cam_dir, face| {
+                        gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.cube_shadow_texture_array, 0, @intCast(i * 6 + face));
+                        const check_fbo_status = gl.checkNamedFramebufferStatus(self.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
+                        if (check_fbo_status != gl.FRAMEBUFFER_COMPLETE) {
+                            std.log.debug("Shadow Framebuffer Incomplete: {}\n", .{check_fbo_status});
+                        }
+
+                        gl.viewport(0, 0, 512, 512);
+
+                        const range = pointLightRange(&point_light);
+
+                        const near_far = Vec2.new(0.1, range);
+                        const camera_matrix = &self.shadow_matrices;
+                        camera_matrix.* = .{
+                            .projection = math.perspective(90, 1, near_far.x(), near_far.y()),
+                            .view = Mat4.lookAt(
+                                pos,
+                                pos.add(cam_dir.target),
+                                cam_dir.up,
+                            ),
+                        };
+
+                        const shadow_view_proj = camera_matrix.projection.mul(camera_matrix.view);
+                        const light_frustum = math.Frustum.new(shadow_view_proj);
+                        light.shadow_vp = shadow_view_proj;
+                        light.near_far = near_far;
+                        gl.uniform2f(Uniform.NearFarPlanes.value(), near_far.x(), near_far.y());
+
+                        gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(&self.shadow_matrices));
+                        checkGLError();
+
+                        gl.clear(gl.DEPTH_BUFFER_BIT);
+                        gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
+
+                        self.renderShadow(&light_frustum);
+                    }
+                },
             }
         }
     }
 
     // Light world space to view space
-    for (lights.lights[0..lights.count]) |*light| {
+    for (lights_buf.lights[0..lights_buf.count]) |*light| {
         light.pos = self.camera.view_mat.mulByVec4(light.pos);
     }
 
@@ -708,6 +772,14 @@ pub fn finish(self: *Render) void {
     //c.SDL_Delay(1);
 }
 
+pub fn pointLightRange(self: *const PointLight) f32 {
+    const color = self.color;
+    const light_intensity = @max(color.x(), color.y(), color.z());
+
+    const cutoff = 0.005;
+    return self.radius * (@sqrt(light_intensity / cutoff) - 1);
+}
+
 const CubeCameraDir = struct {
     face: gl.GLenum,
     target: Vec3,
@@ -869,7 +941,7 @@ const CameraMatrices = extern struct {
     projection: Mat4 = Mat4.identity(),
     view: Mat4 = Mat4.identity(),
 };
-pub const PointLight = extern struct {
+pub const Light = extern struct {
     pos: Vec4, // x, y, z, w - vPos
     color_radius: Vec4, // x, y, z - color, w - radius
     shadow_vp: Mat4 = Mat4.identity(),
@@ -877,8 +949,8 @@ pub const PointLight = extern struct {
 };
 
 // TODO: rename
-pub const PointLightArray = extern struct {
-    lights: [MAX_POINT_LIGHTS]PointLight,
+pub const LightArray = extern struct {
+    lights: [MAX_LIGHTS]Light,
     count: c_uint,
 };
 

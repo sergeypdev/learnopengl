@@ -434,44 +434,6 @@ export fn game_update() bool {
 
         // Collect point lights
         {
-            const point_lights = gmem.render.getPointLights();
-            point_lights.count = 0;
-
-            for (0..gmem.world.entity_count) |i| {
-                const ent = &gmem.world.entities[i];
-                if (!ent.data.flags.active) continue;
-
-                if (ent.data.flags.point_light) {
-                    const pos = ent.globalMatrix(&gmem.world).extractTranslation();
-                    var pos4 = Vec4.new(pos.x(), pos.y(), pos.z(), 1.0);
-
-                    const color = ent.data.light.premultipliedColor();
-                    point_lights.lights[point_lights.count] = .{
-                        .pos = Vec4.new(pos4.x(), pos4.y(), pos4.z(), 1),
-                        .color_radius = Vec4.new(color.x(), color.y(), color.z(), ent.data.point_light.radius),
-                    };
-                    point_lights.count += 1;
-                    if (point_lights.count == Render.MAX_POINT_LIGHTS) {
-                        break;
-                    }
-                }
-                if (ent.data.flags.dir_light) {
-                    const dir4 = ent.globalMatrix(&gmem.world).mulByVec4(Vec4.forward());
-                    const color = ent.data.light.premultipliedColor();
-                    point_lights.lights[point_lights.count] = .{
-                        .pos = dir4,
-                        .color_radius = Vec4.new(color.x(), color.y(), color.z(), 1),
-                    };
-                    point_lights.count += 1;
-                    if (point_lights.count == Render.MAX_POINT_LIGHTS) {
-                        break;
-                    }
-                }
-            }
-
-            gmem.render.flushUBOs();
-
-            // Render meshes and lights
             for (0..gmem.world.entity_count) |i| {
                 const ent = &gmem.world.entities[i];
                 if (!ent.data.flags.active) continue;
@@ -490,7 +452,34 @@ export fn game_update() bool {
                         .transform = ent.globalMatrix(&gmem.world).*,
                     });
                 }
+
+                if (ent.data.flags.point_light) {
+                    const pos = ent.globalMatrix(&gmem.world).extractTranslation();
+                    const color = ent.data.light.premultipliedColor();
+
+                    gmem.render.drawLight(.{
+                        .point = .{
+                            .pos = pos,
+                            .radius = ent.data.point_light.radius,
+                            .color = color,
+                        },
+                    });
+                }
+                if (ent.data.flags.dir_light) {
+                    const dir4 = ent.globalMatrix(&gmem.world).mulByVec4(Vec4.forward());
+                    const color = ent.data.light.premultipliedColor();
+
+                    gmem.render.drawLight(.{
+                        .directional = .{
+                            .dir = dir4.toVec3(),
+                            .color = color,
+                        },
+                    });
+                }
             }
+
+            // TODO: get rid of this
+            gmem.render.flushUBOs();
         }
     }
 
