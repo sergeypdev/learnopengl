@@ -18,6 +18,18 @@ pub const box_corners = [8]Vec3{
     Vec3.new(1, 1, 1),
 };
 
+// Using DirectX/Vulkan NDC coordinates
+pub const ndc_box_corners = [8]Vec3{
+    Vec3.new(-1, -1, 0),
+    Vec3.new(-1, -1, 1),
+    Vec3.new(-1, 1, 0),
+    Vec3.new(-1, 1, 1),
+    Vec3.new(1, -1, 0),
+    Vec3.new(1, -1, 1),
+    Vec3.new(1, 1, 0),
+    Vec3.new(1, 1, 1),
+};
+
 pub const Plane = struct {
     // x, y, z - normal, w - distance
     nd: Vec4 = Vec4.up(),
@@ -74,12 +86,12 @@ pub const AABB = struct {
 
 pub const Frustum = struct {
     // Plane normals
-    top: Plane,
-    right: Plane,
-    bottom: Plane,
-    left: Plane,
-    near: Plane,
-    far: Plane,
+    top: Plane = .{},
+    right: Plane = .{},
+    bottom: Plane = .{},
+    left: Plane = .{},
+    near: Plane = .{},
+    far: Plane = .{},
 
     /// Extracts frustum planes from matrices using Gribb-Hartmann method
     /// If you pass in a projection matrix planes will be in view space.
@@ -95,7 +107,7 @@ pub const Frustum = struct {
         const right = row4.sub(row1);
         const bottom = row4.add(row2);
         const top = row4.sub(row2);
-        const near = row4.add(row3);
+        const near = row3;
         const far = row4.sub(row3);
 
         return .{
@@ -195,7 +207,7 @@ pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, z_near: f32, z
 
     result.data[0][0] = 2 / (right - left);
     result.data[1][1] = 2 / (top - bottom);
-    result.data[2][2] = 2 / (z_near - z_far);
+    result.data[2][2] = 1 / (z_near - z_far);
     result.data[3][3] = 1;
 
     result.data[3][0] = (left + right) / (left - right);

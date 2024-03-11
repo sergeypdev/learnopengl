@@ -590,6 +590,10 @@ pub const IndexSlice = struct {
     offset: gl.GLuint,
     count: gl.GLsizei,
     type: gl.GLenum,
+
+    pub fn bind(self: *const IndexSlice) void {
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.buffer);
+    }
 };
 
 pub const ShaderType = enum {

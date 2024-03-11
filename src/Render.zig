@@ -19,6 +19,7 @@ pub const MAX_FRAMES_QUEUED = 3;
 pub const MAX_LIGHTS = 8;
 pub const MAX_DRAW_COMMANDS = 4096;
 pub const MAX_LIGHT_COMMANDS = 2048;
+pub const CSM_SPLITS = 4;
 
 pub const Render = @This();
 
@@ -62,6 +63,11 @@ post_process_vao: gl.GLuint = 0,
 
 // Bloom
 screen_bloom_sampler: gl.GLuint = 0,
+
+update_view_frustum: bool = true,
+camera_view_proj: Mat4 = Mat4.identity(),
+world_camera_frustum: math.Frustum = .{},
+world_view_frustum_corners: [8]Vec3 = [_]Vec3{Vec3.new(0, 0, 0)} ** 8,
 
 pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetman: *AssetManager) Render {
     var render = Render{
@@ -165,7 +171,7 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
             checkGLError();
             std.debug.assert(render.shadow_texture_array != 0);
 
-            gl.textureStorage3D(render.shadow_texture_array, 1, gl.DEPTH_COMPONENT16, 2048, 2048, 1);
+            gl.textureStorage3D(render.shadow_texture_array, 1, gl.DEPTH_COMPONENT16, 2048, 2048, CSM_SPLITS);
             checkGLError();
 
             gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
@@ -431,6 +437,22 @@ pub fn draw(self: *Render, cmd: DrawCommand) void {
 pub fn finish(self: *Render) void {
     const ginit = globals.g_init;
 
+    const camera_projection = self.camera.projection();
+    const view_proj = camera_projection.mul(self.camera.view_mat);
+    if (self.update_view_frustum) {
+        self.camera_view_proj = view_proj;
+        self.world_camera_frustum = math.Frustum.new(view_proj);
+    }
+
+    const inv_view_proj = view_proj.inv();
+
+    if (self.update_view_frustum) {
+        for (math.ndc_box_corners, 0..) |corner, i| {
+            const pos4 = inv_view_proj.mulByVec4(corner.toVec4(1));
+            self.world_view_frustum_corners[i] = pos4.toVec3().scale(1.0 / pos4.w());
+        }
+    }
+
     const lights = self.lights[0..self.light_count];
 
     // Sort lights: directional first
@@ -448,6 +470,10 @@ pub fn finish(self: *Render) void {
 
     const lights_buf = self.getLightBuffer();
     lights_buf.count = 0;
+
+    var dir_aabb_min = Vec3.zero();
+    var dir_aabb_max = Vec3.zero();
+    var dir_view_proj_mat = Mat4.identity();
 
     // Light shadow maps
     {
@@ -476,17 +502,32 @@ pub fn finish(self: *Render) void {
 
                     gl.viewport(0, 0, 2048, 2048);
 
+                    var projection: Mat4 = undefined;
+                    const view = Mat4.lookAt(
+                        dir_light.dir.scale(-1),
+                        Vec3.zero(),
+                        Vec3.up(),
+                    );
+
+                    {
+                        for (self.world_view_frustum_corners) |corner| {
+                            const pos4 = view.mulByVec4(corner.toVec4(1));
+                            const pos = pos4.toVec3();
+                            dir_aabb_min = pos.min(dir_aabb_min);
+                            dir_aabb_max = pos.max(dir_aabb_max);
+                        }
+                        projection = math.orthographic(dir_aabb_min.x(), dir_aabb_max.x(), dir_aabb_min.y(), dir_aabb_max.y(), -dir_aabb_max.z(), -dir_aabb_min.z());
+                        //projection = math.orthographic(-1, 1, -5, 5, 0, 0.5);
+                    }
+
                     const camera_matrix = &self.shadow_matrices;
                     camera_matrix.* = .{
-                        .projection = math.orthographic(-4, 4, -4, 4, -5, 5),
-                        .view = Mat4.lookAt(
-                            dir_light.dir.scale(-1),
-                            Vec3.zero(),
-                            Vec3.up(),
-                        ),
+                        .view = view,
+                        .projection = projection,
                     };
 
-                    const shadow_view_proj = camera_matrix.projection.mul(camera_matrix.view);
+                    const shadow_view_proj = projection.mul(view);
+                    dir_view_proj_mat = shadow_view_proj;
                     const light_frustum = math.Frustum.new(shadow_view_proj);
                     light.shadow_vp = shadow_view_proj;
 
@@ -578,12 +619,10 @@ pub fn finish(self: *Render) void {
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    const projection = self.camera.projection();
-
     {
         const camera_matrix: *CameraMatrices = @alignCast(@ptrCast(self.camera_matrices[self.tripple_buffer_index * self.uboAlignedSizeOf(CameraMatrices) ..].ptr));
         camera_matrix.* = .{
-            .projection = projection,
+            .projection = camera_projection,
             .view = self.camera.view_mat,
         };
 
@@ -601,15 +640,12 @@ pub fn finish(self: *Render) void {
     gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
     gl.bindVertexArray(self.mesh_vao);
 
-    const view_proj = projection.mul(self.camera.view_mat);
-    const world_camera_frustum = math.Frustum.new(view_proj);
-
     var rendered_count: usize = 0;
     for (self.command_buffer[0..self.command_count]) |*cmd| {
         const mesh = self.assetman.resolveMesh(cmd.mesh);
         const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
 
-        if (!world_camera_frustum.intersectAABB(aabb.transform(cmd.transform))) {
+        if (!self.world_camera_frustum.intersectAABB(aabb.transform(cmd.transform))) {
             continue;
         }
         rendered_count += 1;
@@ -679,6 +715,55 @@ pub fn finish(self: *Render) void {
             mesh.indices.type,
             @ptrFromInt(mesh.indices.offset),
         );
+    }
+
+    // Debug stuff
+    {
+        gl.polygonMode(gl.FRONT_AND_BACK, gl.LINE);
+        defer gl.polygonMode(gl.FRONT_AND_BACK, gl.FILL);
+        gl.lineWidth(4);
+
+        // Frustum debug stuff, drawn only when view frustum is fixed
+        if (!self.update_view_frustum) {
+            gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.unlit).program);
+
+            // Draw wire frustum cubes
+            {
+                const mesh = self.assetman.resolveMesh(a.Meshes.cube.Cube);
+                mesh.positions.bind(Render.Attrib.Position.value());
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
+                gl.uniform3fv(Uniform.Color.value(), 1, @ptrCast(&Vec3.one().data));
+
+                const model = Mat4.fromTranslate(Vec3.new(0, 0, 0.5)).mul(Mat4.fromScale(Vec3.new(1, 1, 0.5)));
+
+                const view_proj_matrices = [_]Mat4{ self.camera_view_proj, dir_view_proj_mat };
+
+                for (view_proj_matrices) |frustum_view_proj| {
+                    const frustum_model_mat = frustum_view_proj.inv().mul(model);
+                    gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&frustum_model_mat.data));
+                    gl.drawElements(
+                        gl.TRIANGLES,
+                        mesh.indices.count,
+                        mesh.indices.type,
+                        @ptrFromInt(mesh.indices.offset),
+                    );
+                }
+            }
+            // Draw corner positions of view frustum
+            {
+                const mesh = self.assetman.resolveMesh(a.Meshes.sphere.Icosphere);
+                mesh.positions.bind(Attrib.Position.value());
+                mesh.indices.bind();
+
+                gl.uniform3fv(Uniform.Color.value(), 1, @ptrCast(&Vec3.new(1, 0, 0).data));
+
+                for (self.world_view_frustum_corners) |corner| {
+                    const model = Mat4.fromTranslate(corner);
+                    gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&model.data));
+                    gl.drawElements(gl.TRIANGLES, mesh.indices.count, mesh.indices.type, @ptrFromInt(mesh.indices.offset));
+                }
+            }
+        }
     }
 
     //std.log.debug("Total draws {}, frustum culled draws {}\n", .{ self.command_count, rendered_count });
@@ -927,7 +1012,7 @@ pub const Camera = struct {
     fovy: f32 = 60,
     aspect: f32 = 1,
     near: f32 = 0.1,
-    far: f32 = 100,
+    far: f32 = 10,
 
     view_mat: Mat4 = Mat4.identity(),
 

@@ -335,6 +335,22 @@ export fn game_update() bool {
                             ginit.vsync = !ginit.vsync;
                         }
                     },
+                    // Freeze view frustum
+                    c.SDL_SCANCODE_F8 => {
+                        if (event.type == c.SDL_KEYDOWN) {
+                            gmem.render.update_view_frustum = !gmem.render.update_view_frustum;
+                        }
+                    },
+                    // Expand camera far
+                    c.SDL_SCANCODE_F7 => {
+                        if (event.type == c.SDL_KEYDOWN) {
+                            if (gmem.render.camera.far == 10) {
+                                gmem.render.camera.far = 100;
+                            } else {
+                                gmem.render.camera.far = 10;
+                            }
+                        }
+                    },
                     c.SDL_SCANCODE_ESCAPE => {
                         if (event.type == c.SDL_KEYUP) {
                             if (ginit.fullscreen) {

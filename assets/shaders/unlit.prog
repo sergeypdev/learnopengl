@@ -1,0 +1,5 @@
+{
+  "shader": "unlit.glsl",
+  "vertex": true,
+  "fragment": true
+}
