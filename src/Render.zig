@@ -19,7 +19,7 @@ pub const MAX_FRAMES_QUEUED = 3;
 pub const MAX_LIGHTS = 8;
 pub const MAX_DRAW_COMMANDS = 4096;
 pub const MAX_LIGHT_COMMANDS = 2048;
-pub const CSM_SPLITS = 4;
+pub const CSM_SPLITS = 2;
 
 pub const Render = @This();
 
@@ -67,7 +67,7 @@ screen_bloom_sampler: gl.GLuint = 0,
 update_view_frustum: bool = true,
 camera_view_proj: Mat4 = Mat4.identity(),
 world_camera_frustum: math.Frustum = .{},
-world_view_frustum_corners: [8]Vec3 = [_]Vec3{Vec3.new(0, 0, 0)} ** 8,
+world_view_frustum_corners: [CSM_SPLITS][8]Vec3 = undefined,
 
 pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetman: *AssetManager) Render {
     var render = Render{
@@ -439,18 +439,10 @@ pub fn finish(self: *Render) void {
 
     const camera_projection = self.camera.projection();
     const view_proj = camera_projection.mul(self.camera.view_mat);
+
     if (self.update_view_frustum) {
         self.camera_view_proj = view_proj;
         self.world_camera_frustum = math.Frustum.new(view_proj);
-    }
-
-    const inv_view_proj = view_proj.inv();
-
-    if (self.update_view_frustum) {
-        for (math.ndc_box_corners, 0..) |corner, i| {
-            const pos4 = inv_view_proj.mulByVec4(corner.toVec4(1));
-            self.world_view_frustum_corners[i] = pos4.toVec3().scale(1.0 / pos4.w());
-        }
     }
 
     const lights = self.lights[0..self.light_count];
@@ -471,9 +463,7 @@ pub fn finish(self: *Render) void {
     const lights_buf = self.getLightBuffer();
     lights_buf.count = 0;
 
-    var dir_aabb_min = Vec3.zero();
-    var dir_aabb_max = Vec3.zero();
-    var dir_view_proj_mat = Mat4.identity();
+    var dir_view_proj_mat: [CSM_SPLITS]Mat4 = undefined;
 
     // Light shadow maps
     {
@@ -494,50 +484,80 @@ pub fn finish(self: *Render) void {
                 .directional => |dir_light| {
                     light.pos = dir_light.dir.toVec4(0);
                     light.color_radius = dir_light.color.toVec4(0);
-                    gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.shadow_texture_array, 0, 0);
-                    const check_fbo_status = gl.checkNamedFramebufferStatus(self.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
-                    if (check_fbo_status != gl.FRAMEBUFFER_COMPLETE) {
-                        std.log.debug("Shadow Framebuffer Incomplete: {}\n", .{check_fbo_status});
-                    }
-
                     gl.viewport(0, 0, 2048, 2048);
 
-                    var projection: Mat4 = undefined;
+                    const camera_matrix = &self.shadow_matrices;
+
                     const view = Mat4.lookAt(
                         dir_light.dir.scale(-1),
                         Vec3.zero(),
                         Vec3.up(),
                     );
 
-                    {
-                        for (self.world_view_frustum_corners) |corner| {
-                            const pos4 = view.mulByVec4(corner.toVec4(1));
-                            const pos = pos4.toVec3();
-                            dir_aabb_min = pos.min(dir_aabb_min);
-                            dir_aabb_max = pos.max(dir_aabb_max);
+                    const shadow_map_idx = 0;
+
+                    light.view_mat = view;
+                    light.params.shadow_map_idx = shadow_map_idx;
+                    light.params.csm_split_count = @floatFromInt(CSM_SPLITS);
+
+                    const csm_split_z_diff = (self.camera.far - self.camera.near) / @as(f32, @floatFromInt(CSM_SPLITS));
+
+                    for (0..CSM_SPLITS) |split_idx| {
+                        var split_far: f32 = 0;
+
+                        gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.shadow_texture_array, 0, @intCast(shadow_map_idx * CSM_SPLITS + split_idx));
+                        const check_fbo_status = gl.checkNamedFramebufferStatus(self.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
+                        if (check_fbo_status != gl.FRAMEBUFFER_COMPLETE) {
+                            std.log.debug("Shadow Framebuffer Incomplete: {}\n", .{check_fbo_status});
                         }
-                        projection = math.orthographic(dir_aabb_min.x(), dir_aabb_max.x(), dir_aabb_min.y(), dir_aabb_max.y(), -dir_aabb_max.z(), -dir_aabb_min.z());
-                        //projection = math.orthographic(-1, 1, -5, 5, 0, 0.5);
+
+                        var projection: Mat4 = undefined;
+
+                        {
+                            if (self.update_view_frustum) {
+                                var camera = self.camera.*;
+                                camera.near = camera.near + csm_split_z_diff * @as(f32, @floatFromInt(split_idx));
+                                camera.far = camera.near + csm_split_z_diff;
+                                split_far = camera.far;
+                                const inv_csm_proj = camera.projection().mul(camera.view_mat).inv();
+
+                                for (math.ndc_box_corners, 0..) |corner, corner_idx| {
+                                    const pos4 = inv_csm_proj.mulByVec4(corner.toVec4(1));
+                                    self.world_view_frustum_corners[split_idx][corner_idx] = pos4.toVec3().scale(1.0 / pos4.w());
+                                }
+                            }
+
+                            var dir_aabb_min = Vec3.zero();
+                            var dir_aabb_max = Vec3.zero();
+                            for (self.world_view_frustum_corners[split_idx]) |corner| {
+                                const pos4 = view.mulByVec4(corner.toVec4(1));
+                                const pos = pos4.toVec3();
+                                dir_aabb_min = pos.min(dir_aabb_min);
+                                dir_aabb_max = pos.max(dir_aabb_max);
+                            }
+                            projection = math.orthographic(dir_aabb_min.x(), dir_aabb_max.x(), dir_aabb_min.y(), dir_aabb_max.y(), -dir_aabb_max.z(), -dir_aabb_min.z());
+                        }
+
+                        camera_matrix.* = .{
+                            .view = view,
+                            .projection = projection,
+                        };
+
+                        const shadow_view_proj = projection.mul(view);
+                        dir_view_proj_mat[split_idx] = shadow_view_proj;
+                        const light_frustum = math.Frustum.new(shadow_view_proj);
+
+                        light.view_proj_mats[split_idx] = shadow_view_proj;
+                        light.csm_split_points[split_idx] = -split_far;
+
+                        gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(&self.shadow_matrices));
+                        checkGLError();
+
+                        gl.clear(gl.DEPTH_BUFFER_BIT);
+                        gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
+
+                        self.renderShadow(&light_frustum);
                     }
-
-                    const camera_matrix = &self.shadow_matrices;
-                    camera_matrix.* = .{
-                        .view = view,
-                        .projection = projection,
-                    };
-
-                    const shadow_view_proj = projection.mul(view);
-                    dir_view_proj_mat = shadow_view_proj;
-                    const light_frustum = math.Frustum.new(shadow_view_proj);
-                    light.shadow_vp = shadow_view_proj;
-
-                    gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(&self.shadow_matrices));
-                    checkGLError();
-
-                    gl.clear(gl.DEPTH_BUFFER_BIT);
-                    gl.bindBufferBase(gl.UNIFORM_BUFFER, UBO.CameraMatrices.value(), self.shadow_matrices_buffer);
-
-                    self.renderShadow(&light_frustum);
                 },
                 .point => |point_light| {
                     if (!finished_dir_lights) {
@@ -549,10 +569,19 @@ pub fn finish(self: *Render) void {
                     light.pos = pos.toVec4(1);
                     light.color_radius = point_light.color.toVec4(point_light.radius);
 
-                    light.shadow_vp = Mat4.fromTranslate(pos.negate());
+                    const range = pointLightRange(&point_light);
+                    const near_far = Vec2.new(0.1, range);
+
+                    light.view_mat = Mat4.fromTranslate(pos.negate());
+                    light.params.near = near_far.x();
+                    light.params.far = near_far.y();
+
+                    const shadow_map_idx = i;
+                    light.params.shadow_map_idx = @floatFromInt(shadow_map_idx);
+
                     // For each cube face
                     for (cube_camera_dirs, 0..) |cam_dir, face| {
-                        gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.cube_shadow_texture_array, 0, @intCast(i * 6 + face));
+                        gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.cube_shadow_texture_array, 0, @intCast(shadow_map_idx * 6 + face));
                         const check_fbo_status = gl.checkNamedFramebufferStatus(self.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
                         if (check_fbo_status != gl.FRAMEBUFFER_COMPLETE) {
                             std.log.debug("Shadow Framebuffer Incomplete: {}\n", .{check_fbo_status});
@@ -560,9 +589,6 @@ pub fn finish(self: *Render) void {
 
                         gl.viewport(0, 0, 512, 512);
 
-                        const range = pointLightRange(&point_light);
-
-                        const near_far = Vec2.new(0.1, range);
                         const camera_matrix = &self.shadow_matrices;
                         camera_matrix.* = .{
                             .projection = math.perspective(90, 1, near_far.x(), near_far.y()),
@@ -575,8 +601,6 @@ pub fn finish(self: *Render) void {
 
                         const shadow_view_proj = camera_matrix.projection.mul(camera_matrix.view);
                         const light_frustum = math.Frustum.new(shadow_view_proj);
-                        light.shadow_vp = shadow_view_proj;
-                        light.near_far = near_far;
                         gl.uniform2f(Uniform.NearFarPlanes.value(), near_far.x(), near_far.y());
 
                         gl.namedBufferSubData(self.shadow_matrices_buffer, 0, @sizeOf(CameraMatrices), std.mem.asBytes(&self.shadow_matrices));
@@ -736,7 +760,11 @@ pub fn finish(self: *Render) void {
 
                 const model = Mat4.fromTranslate(Vec3.new(0, 0, 0.5)).mul(Mat4.fromScale(Vec3.new(1, 1, 0.5)));
 
-                const view_proj_matrices = [_]Mat4{ self.camera_view_proj, dir_view_proj_mat };
+                var view_proj_matrices: [1 + CSM_SPLITS]Mat4 = undefined;
+                for (0..CSM_SPLITS) |split_idx| {
+                    view_proj_matrices[split_idx] = dir_view_proj_mat[split_idx];
+                }
+                view_proj_matrices[CSM_SPLITS] = self.camera_view_proj;
 
                 for (view_proj_matrices) |frustum_view_proj| {
                     const frustum_model_mat = frustum_view_proj.inv().mul(model);
@@ -757,10 +785,12 @@ pub fn finish(self: *Render) void {
 
                 gl.uniform3fv(Uniform.Color.value(), 1, @ptrCast(&Vec3.new(1, 0, 0).data));
 
-                for (self.world_view_frustum_corners) |corner| {
-                    const model = Mat4.fromTranslate(corner);
-                    gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&model.data));
-                    gl.drawElements(gl.TRIANGLES, mesh.indices.count, mesh.indices.type, @ptrFromInt(mesh.indices.offset));
+                for (0..CSM_SPLITS) |split_idx| {
+                    for (self.world_view_frustum_corners[split_idx]) |corner| {
+                        const model = Mat4.fromTranslate(corner);
+                        gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&model.data));
+                        gl.drawElements(gl.TRIANGLES, mesh.indices.count, mesh.indices.type, @ptrFromInt(mesh.indices.offset));
+                    }
                 }
             }
         }
@@ -1029,13 +1059,25 @@ const CameraMatrices = extern struct {
 pub const Light = extern struct {
     pos: Vec4, // x, y, z, w - vPos
     color_radius: Vec4, // x, y, z - color, w - radius
-    shadow_vp: Mat4 = Mat4.identity(),
-    near_far: Vec2 = Vec2.zero(),
+    view_mat: Mat4 = Mat4.identity(),
+
+    // for directional lights contains view projection matrices for each split
+    // TODO: compress this somehow
+    view_proj_mats: [4]Mat4 = undefined,
+
+    // Usese floats because it's a vec4 on the other end
+    params: extern struct {
+        near: f32,
+        far: f32,
+        shadow_map_idx: f32,
+        csm_split_count: f32,
+    },
+    csm_split_points: [4]f32 = undefined,
 };
 
 // TODO: rename
 pub const LightArray = extern struct {
-    lights: [MAX_LIGHTS]Light,
+    lights: [MAX_LIGHTS]Light align(16),
     count: c_uint,
 };
 

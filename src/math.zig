@@ -31,7 +31,7 @@ pub const ndc_box_corners = [8]Vec3{
 };
 
 pub const Plane = struct {
-    // x, y, z - normal, w - distance
+    // x, y, z - normal, w - negative distance
     nd: Vec4 = Vec4.up(),
 
     pub fn new(normal_d: Vec4) Plane {
@@ -39,17 +39,33 @@ pub const Plane = struct {
         return .{ .nd = normal_d.scale(scale) };
     }
 
+    pub fn fromNormalDistance(norm: Vec3, dist: f32) Plane {
+        return Plane.new(norm.toVec4(-dist));
+    }
+
+    pub inline fn normal(self: Plane) Vec3 {
+        return self.nd.toVec3();
+    }
+
+    pub inline fn distance(self: Plane) f32 {
+        return -self.nd.w();
+    }
+
+    pub fn point(self: Plane) Vec3 {
+        return self.nd.toVec3().scale(self.nd.w());
+    }
+
     pub fn transform(self: *const Plane, matrix: *const Mat4) Plane {
-        var point = Vec4.fromVec3(self.nd.toVec3().scale(self.nd.w()), 1);
-        var normal = Vec4.fromVec3(self.nd.toVec3(), 0);
+        var p = self.point().toVec4(1);
+        var n = self.normal().toVec4(0);
 
-        point = matrix.mulByVec4(point);
-        point = point.scale(1.0 / point.w());
-        normal = matrix.mulByVec4(normal).norm();
+        p = matrix.mulByVec4(p);
+        p = p.scale(1.0 / p.w());
+        n = matrix.mulByVec4(n).norm();
 
-        normal.wMut().* = point.toVec3().dot(normal.toVec3());
+        n.wMut().* = p.toVec3().dot(n.toVec3());
 
-        return .{ .nd = normal };
+        return .{ .nd = n };
     }
 
     pub fn isUnder(self: *const Plane, p: Vec3) bool {
@@ -118,6 +134,14 @@ pub const Frustum = struct {
             .near = Plane.new(near),
             .far = Plane.new(far),
         };
+    }
+
+    pub fn getNearDist(self: *const Frustum) f32 {
+        return self.near.distance();
+    }
+
+    pub fn rangeZ(self: *const Frustum) f32 {
+        return self.far.point().sub(self.near.point()).dot(self.near.normal());
     }
 
     pub fn transform(self: *const Frustum, matrix: *const Mat4) Frustum {

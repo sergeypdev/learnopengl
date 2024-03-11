@@ -7,8 +7,18 @@
 struct Light {
   vec4 vPos;
   vec4 color;
-  mat4 shadow_vp; // for spot and dir lights
-  vec2 near_far; // for point lights
+
+  mat4 view_mat;
+
+  // for directional lights contains view projection matrices for each split
+  // TODO: compress this somehow
+  mat4[4] view_proj_mats;
+
+  // x, y = near, far for point lights
+  // z = shadow map index
+  // w = csm split count for directional lights
+  vec4 params;
+  vec4 csm_split_points; // TODO: Maybe increase to 8, though it's probably too many
 };
 
 // UBOs
@@ -17,11 +27,30 @@ layout(std140, binding = 0) uniform Matrices {
   mat4 view;
 };
 
-// TODO: rename
 layout(std140, binding = 1) uniform Lights {
   Light lights[MAX_POINT_LIGHTS];
   uint lights_count;
 };
+
+int getShadowMapIndex(int lightIdx) {
+  return int(lights[lightIdx].params.z);
+}
+
+int getCSMSplitCount(int lightIdx) {
+  return clamp(int(lights[lightIdx].params.w), 0, 4);
+}
+
+int getCSMSplit(int lightIdx, float depth) {
+  int totalSplits = getCSMSplitCount(lightIdx);
+
+  for (int i = 1; i < totalSplits; i++) {
+    if (depth > lights[lightIdx].csm_split_points[i]) {
+      return i;
+    }
+  }
+
+  return totalSplits - 1;
+}
 
 // Uniforms
 layout(location = 1) uniform mat4 model;
@@ -190,16 +219,19 @@ vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
   float normal_offset_scale = clamp(1 - NDotL, 0, 1);
   normal_offset_scale *= 10; // constant
 
+  int shadow_map_idx = getShadowMapIndex(light_idx);
+  shadow_map_idx = 0;
+
   float constant_bias = 0.003;
   float shadow_mult = 1;
   vec4 shadow_offset = vec4(VertexOut.wNormal * normal_offset_scale, 0);
   if (point == 1) {
     vec2 shadow_map_texel_size = 1.0 / vec2(textureSize(cube_shadow_maps, 0));
     shadow_offset *= shadow_map_texel_size.x;
-    vec3 shadow_dir = (light.shadow_vp * vec4(VertexOut.wPos, 1.0)).xyz;
+    vec3 shadow_dir = (light.view_mat * vec4(VertexOut.wPos, 1.0)).xyz;
     float world_depth = length(shadow_dir.xyz);
-    shadow_dir = normalize((light.shadow_vp * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xyz);
-    float mapped_depth = map(world_depth, light.near_far.x, light.near_far.y, 0, 1);
+    shadow_dir = normalize((light.view_mat * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xyz);
+    float mapped_depth = map(world_depth, light.params.x, light.params.y, 0, 1);
 
     vec4 texcoord;
     texcoord.xyz = shadow_dir;
@@ -216,20 +248,21 @@ vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
 
     shadow_mult = sum / 27;
   } else {
+    // Directional shadow
     vec2 shadow_map_texel_size = 1.0 / vec2(textureSize(shadow_maps, 0));
     shadow_offset *= shadow_map_texel_size.x;
-    // Directional shadow
-    vec4 shadow_pos = light.shadow_vp * vec4(VertexOut.wPos, 1.0);
-    shadow_pos.xy = (light.shadow_vp * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xy;
+    float view_depth = (light.view_mat * vec4(VertexOut.wPos, 1.0)).z;
+    int csm_split_idx = getCSMSplit(light_idx, view_depth);
+    vec4 shadow_pos = light.view_proj_mats[csm_split_idx] * vec4(VertexOut.wPos, 1.0);
+    shadow_pos.xy = (light.view_proj_mats[csm_split_idx] * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xy;
     shadow_pos /= shadow_pos.w;
     shadow_pos.xy = shadow_pos.xy * 0.5 + 0.5; // [-1, 1] to [0, 1]
     shadow_pos.z = min(shadow_pos.z, 1);
     shadow_pos.z -= constant_bias;
 
-
     vec4 texcoord;
     texcoord.xyw = shadow_pos.xyz; // sampler2DArrayShadow strange texcoord mapping
-    texcoord.z = 0; // First shadow map
+    texcoord.z = shadow_map_idx + csm_split_idx;
 
     float sum = 0;
     for (float y = -1.5; y <= 1.5; y += 1) {
@@ -258,7 +291,7 @@ void main() {
 
   vec3 finalColor = vec3(0);
 
-  for (int i = 0; i < lights_count; i++) {
+  for (int i = 0; i < clamp(lights_count, uint(0), uint(MAX_POINT_LIGHTS)); i++) {
     finalColor += microfacetModel(material, i, lights[i], VertexOut.vPos, N);
   }
 
