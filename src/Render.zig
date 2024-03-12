@@ -21,10 +21,10 @@ pub const MAX_DRAW_COMMANDS = 4096;
 pub const MAX_LIGHT_COMMANDS = 2048;
 pub const CSM_SPLITS = 4;
 // affects how cascades are split
-// 0 - exponential
-// 1 - uniform
+// 0 - uniform
+// 1 - exponential
 // 0.5 - mix between the two
-pub const CSM_EXPO_UNIFORM_FACTOR = 0.8;
+pub const CSM_EXPO_UNIFORM_FACTOR = 0.9;
 
 pub const Render = @This();
 
