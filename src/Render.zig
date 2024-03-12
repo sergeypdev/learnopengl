@@ -24,7 +24,7 @@ pub const CSM_SPLITS = 4;
 // 0 - uniform
 // 1 - exponential
 // 0.5 - mix between the two
-pub const CSM_EXPO_UNIFORM_FACTOR = 0.9;
+pub const CSM_EXPO_UNIFORM_FACTOR = 0.5;
 
 pub const Render = @This();
 
@@ -553,7 +553,23 @@ pub fn finish(self: *Render) void {
                                 dir_aabb_min = pos.min(dir_aabb_min);
                                 dir_aabb_max = pos.max(dir_aabb_max);
                             }
-                            projection = math.orthographic(dir_aabb_min.x(), dir_aabb_max.x(), dir_aabb_min.y(), dir_aabb_max.y(), -dir_aabb_max.z(), -dir_aabb_min.z());
+                            // Flip z because it's negative in view space, but near, far is positive
+                            {
+                                const min_z = dir_aabb_min.z();
+                                dir_aabb_min.zMut().* = -dir_aabb_max.z();
+                                dir_aabb_max.zMut().* = -min_z;
+                            }
+                            const b_sphere = math.AABB.fromMinMax(dir_aabb_min, dir_aabb_max).toSphere();
+
+                            // NOTE: Use bounding sphere instead of AABB to prevent split size changing with rotation
+                            projection = math.orthographic(
+                                b_sphere.origin.x() - b_sphere.radius,
+                                b_sphere.origin.x() + b_sphere.radius,
+                                b_sphere.origin.y() - b_sphere.radius,
+                                b_sphere.origin.y() + b_sphere.radius,
+                                b_sphere.origin.z() - b_sphere.radius,
+                                b_sphere.origin.z() + b_sphere.radius,
+                            );
                         }
 
                         camera_matrix.* = .{

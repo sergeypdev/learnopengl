@@ -98,6 +98,19 @@ pub const AABB = struct {
 
         return AABB.fromMinMax(min, max);
     }
+
+    pub fn toSphere(self: *const AABB) BoundingSphere {
+        const max_extent = @max(@max(self.extents.x(), self.extents.y()), self.extents.z());
+        return BoundingSphere{
+            .origin = self.origin,
+            .radius = max_extent,
+        };
+    }
+};
+
+pub const BoundingSphere = struct {
+    origin: Vec3 = Vec3.zero(),
+    radius: f32 = 0,
 };
 
 pub const Frustum = struct {
