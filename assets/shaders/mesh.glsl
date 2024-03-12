@@ -43,7 +43,7 @@ int getCSMSplitCount(int lightIdx) {
 int getCSMSplit(int lightIdx, float depth) {
   int totalSplits = getCSMSplitCount(lightIdx);
 
-  for (int i = 1; i < totalSplits; i++) {
+  for (int i = 0; i < totalSplits; i++) {
     if (depth > lights[lightIdx].csm_split_points[i]) {
       return i;
     }
@@ -180,11 +180,21 @@ vec2 poissonDisk[4] = vec2[](
   vec2( 0.34495938, 0.29387760 )
 );
 
+const vec3 csm_split_colors[4] = vec3[](
+  vec3(0f, 1f, 0.17f),
+  vec3(1f, 0.2f, 0.6f),
+  vec3(0.17f, 0.78f, 1f),
+  vec3(0.91f, 0.93f, 0.64f)
+);
+
 float map(float value, float min1, float max1, float min2, float max2) {
   return min2 + (value - min1) * (max2 - min2) / (max1 - min1);
 }
 
 vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
+  int csm_split_idx = getCSMSplit(light_idx, P.z);
+  mat.albedo = mix(mat.albedo, csm_split_colors[csm_split_idx], 0.8);
+
   vec3 diffuseBrdf = vec3(0); // metallic
   if (!mat.metallic) {
     diffuseBrdf = mat.albedo;
@@ -251,8 +261,6 @@ vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
     // Directional shadow
     vec2 shadow_map_texel_size = 1.0 / vec2(textureSize(shadow_maps, 0));
     shadow_offset *= shadow_map_texel_size.x;
-    float view_depth = (light.view_mat * vec4(VertexOut.wPos, 1.0)).z;
-    int csm_split_idx = getCSMSplit(light_idx, view_depth);
     vec4 shadow_pos = light.view_proj_mats[csm_split_idx] * vec4(VertexOut.wPos, 1.0);
     shadow_pos.xy = (light.view_proj_mats[csm_split_idx] * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xy;
     shadow_pos /= shadow_pos.w;

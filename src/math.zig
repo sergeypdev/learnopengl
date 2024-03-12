@@ -159,12 +159,12 @@ pub const Frustum = struct {
         return !(self.top.isUnder(point) or self.right.isUnder(point) or self.bottom.isUnder(point) or self.left.isUnder(point) or self.near.isUnder(point) or self.far.isUnder(point));
     }
 
-    pub fn intersectAABB(self: *const Frustum, aabb: AABB) bool {
+    fn intersectAABBInternal(self: *const Frustum, aabb: AABB, comptime skip_near: bool) bool {
         var outside_top_plane = true;
         var outside_bottom_plane = true;
         var outside_left_plane = true;
         var outside_right_plane = true;
-        var outside_near_plane = true;
+        var outside_near_plane = !skip_near;
         var outside_far_plane = true;
         inline for (box_corners) |corner| {
             const p = aabb.origin.add(aabb.extents.mul(corner));
@@ -173,11 +173,21 @@ pub const Frustum = struct {
             outside_bottom_plane = outside_bottom_plane and self.bottom.isUnder(p);
             outside_left_plane = outside_left_plane and self.left.isUnder(p);
             outside_right_plane = outside_right_plane and self.right.isUnder(p);
-            outside_near_plane = outside_near_plane and self.near.isUnder(p);
+            if (!skip_near) {
+                outside_near_plane = outside_near_plane and self.near.isUnder(p);
+            }
             outside_far_plane = outside_far_plane and self.far.isUnder(p);
         }
 
         return !(outside_left_plane or outside_right_plane or outside_bottom_plane or outside_top_plane or outside_near_plane or outside_far_plane);
+    }
+
+    pub fn intersectAABB(self: *const Frustum, aabb: AABB) bool {
+        return self.intersectAABBInternal(aabb, false);
+    }
+
+    pub fn intersectAABBSkipNear(self: *const Frustum, aabb: AABB) bool {
+        return self.intersectAABBInternal(aabb, true);
     }
 };
 

@@ -19,7 +19,12 @@ pub const MAX_FRAMES_QUEUED = 3;
 pub const MAX_LIGHTS = 8;
 pub const MAX_DRAW_COMMANDS = 4096;
 pub const MAX_LIGHT_COMMANDS = 2048;
-pub const CSM_SPLITS = 2;
+pub const CSM_SPLITS = 4;
+// affects how cascades are split
+// 0 - exponential
+// 1 - uniform
+// 0.5 - mix between the two
+pub const CSM_EXPO_UNIFORM_FACTOR = 0.8;
 
 pub const Render = @This();
 
@@ -467,6 +472,9 @@ pub fn finish(self: *Render) void {
 
     // Light shadow maps
     {
+        gl.enable(gl.DEPTH_CLAMP);
+        defer gl.disable(gl.DEPTH_CLAMP);
+
         gl.bindVertexArray(self.shadow_vao);
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, self.shadow_framebuffer);
 
@@ -500,10 +508,21 @@ pub fn finish(self: *Render) void {
                     light.params.shadow_map_idx = shadow_map_idx;
                     light.params.csm_split_count = @floatFromInt(CSM_SPLITS);
 
-                    const csm_split_z_diff = (self.camera.far - self.camera.near) / @as(f32, @floatFromInt(CSM_SPLITS));
+                    var splits: [CSM_SPLITS + 1]f32 = undefined;
+
+                    const splits_count_f: f32 = @floatFromInt(CSM_SPLITS);
+                    for (0..CSM_SPLITS + 1) |split_idx| {
+                        const split_idx_f: f32 = @floatFromInt(split_idx);
+                        const split_i_over_n = split_idx_f / splits_count_f;
+                        const expo_split = self.camera.near * std.math.pow(f32, self.camera.far / self.camera.near, split_i_over_n);
+                        const uniform_split = self.camera.near + split_i_over_n * (self.camera.far - self.camera.near);
+                        const split = CSM_EXPO_UNIFORM_FACTOR * expo_split + (1.0 - CSM_EXPO_UNIFORM_FACTOR) * uniform_split;
+                        splits[split_idx] = split;
+                    }
 
                     for (0..CSM_SPLITS) |split_idx| {
-                        var split_far: f32 = 0;
+                        const split_near = splits[split_idx];
+                        const split_far = splits[split_idx + 1];
 
                         gl.namedFramebufferTextureLayer(self.shadow_framebuffer, gl.DEPTH_ATTACHMENT, self.shadow_texture_array, 0, @intCast(shadow_map_idx * CSM_SPLITS + split_idx));
                         const check_fbo_status = gl.checkNamedFramebufferStatus(self.shadow_framebuffer, gl.DRAW_FRAMEBUFFER);
@@ -516,9 +535,8 @@ pub fn finish(self: *Render) void {
                         {
                             if (self.update_view_frustum) {
                                 var camera = self.camera.*;
-                                camera.near = camera.near + csm_split_z_diff * @as(f32, @floatFromInt(split_idx));
-                                camera.far = camera.near + csm_split_z_diff;
-                                split_far = camera.far;
+                                camera.near = split_near;
+                                camera.far = split_far;
                                 const inv_csm_proj = camera.projection().mul(camera.view_mat).inv();
 
                                 for (math.ndc_box_corners, 0..) |corner, corner_idx| {
@@ -939,7 +957,7 @@ fn renderShadow(self: *Render, frustum: *const math.Frustum) void {
         const mesh = self.assetman.resolveMesh(cmd.mesh);
         const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
 
-        if (!frustum.intersectAABB(aabb.transform(cmd.transform))) {
+        if (!frustum.intersectAABBSkipNear(aabb.transform(cmd.transform))) {
             continue;
         }
 
