@@ -9,6 +9,7 @@ const Vector2 = formats.Vector2;
 const Vector3 = formats.Vector3;
 const za = @import("zalgebra");
 const Vec3 = za.Vec3;
+const Vec4 = za.Vec4;
 const Mat4 = za.Mat4;
 const c = @cImport({
     @cInclude("assimp/cimport.h");
@@ -203,7 +204,7 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
             var base_color: c.aiColor4D = .{};
             if (c.aiGetMaterialColor(material, AI_MATKEY_BASE_COLOR, 0, 0, &base_color) == c.aiReturn_SUCCESS) {
                 // TODO: rgba
-                mat_output.albedo = Vec3.new(base_color.r, base_color.g, base_color.b);
+                mat_output.albedo = Vec4.new(base_color.r, base_color.g, base_color.b, base_color.a);
             }
 
             if (c.aiGetMaterialTextureCount(material, c.aiTextureType_BASE_COLOR) > 0) {

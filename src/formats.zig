@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const Handle = @import("assets").Handle;
 const za = @import("zalgebra");
 const Vec3 = za.Vec3;
+const Vec4 = za.Vec4;
 pub const Entity = @import("entity.zig").Entity;
 
 pub const native_endian = builtin.cpu.arch.endian();
@@ -366,8 +367,12 @@ test "write and read scene" {
 }
 
 pub const Material = extern struct {
-    // TODO: rgba
-    albedo: Vec3 = Vec3.one(),
+    pub const BlendMode = enum(u8) {
+        Opaque,
+        AlphaBlend,
+    };
+
+    albedo: Vec4 = Vec4.one(),
     albedo_map: Handle.Texture = .{},
     normal_map: Handle.Texture = .{},
     metallic: f32 = 0,
@@ -376,6 +381,7 @@ pub const Material = extern struct {
     roughness_map: Handle.Texture = .{},
     emission: Vec3 = Vec3.zero(),
     emission_map: Handle.Texture = .{},
+    blend_mode: BlendMode = .Opaque,
 
     pub fn fromBuffer(buf: []const u8) Material {
         const mat: *align(1) const Material = @ptrCast(buf);

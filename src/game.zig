@@ -230,6 +230,8 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .mesh = .{
             .handle = a.Meshes.plane.Plane,
             .material = .{
+                .blend_mode = .AlphaBlend,
+                .albedo = Vec4.new(1, 1, 1, 0.5),
                 .normal_map = a.Textures.@"tile.norm",
             },
             .override_material = true,
@@ -265,7 +267,8 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
                 .mesh = .{
                     .handle = a.Meshes.bunny.BunnyStanfordUVUnwrapped_res1_bun_zipper_res1,
                     .material = .{
-                        .albedo = Vec3.new(1.000, 0.766, 0.336),
+                        .blend_mode = .AlphaBlend,
+                        .albedo = Vec4.new(1.000, 0.766, 0.336, 0.5),
                         // .albedo_map = a.Textures.bunny_tex1,
                         // .normal_map = a.Textures.@"tile.norm",
                         .roughness = @as(f32, @floatFromInt(i + 1)) / 10.0,
@@ -464,7 +467,7 @@ export fn game_update() bool {
                 } else if (ent.data.flags.point_light) {
                     gmem.render.draw(.{
                         .mesh = a.Meshes.sphere.Icosphere,
-                        .material_override = .{ .albedo = Vec3.zero(), .emission = ent.data.light.premultipliedColor() },
+                        .material_override = .{ .albedo = Vec4.new(0, 0, 0, 1), .emission = ent.data.light.premultipliedColor() },
                         .transform = ent.globalMatrix(&gmem.world).*,
                     });
                 }

@@ -55,7 +55,7 @@ int getCSMSplit(int lightIdx, float depth) {
 // Uniforms
 layout(location = 1) uniform mat4 model;
 
-layout(location = 2) uniform vec3 color;
+layout(location = 2) uniform vec4 color;
 layout(location = 3, bindless_sampler) uniform sampler2D albedo_map;
 layout(location = 4) uniform vec2 albedo_map_uv_scale = vec2(1);
 
@@ -122,7 +122,7 @@ void main() {
 out vec4 FragColor;
 
 struct Material {
-  vec3 albedo;
+  vec4 albedo;
   bool metallic;
   float roughness;
   vec3 emission;
@@ -130,7 +130,7 @@ struct Material {
 
 Material evalMaterial() {
   Material result;
-  result.albedo = textureSize(albedo_map, 0) == ivec2(0) ? pow(color, vec3(2.2)) : texture(albedo_map, VertexOut.uv * albedo_map_uv_scale).rgb;
+  result.albedo = textureSize(albedo_map, 0) == ivec2(0) ? vec4(pow(color.rgb, vec3(2.2)), color.a) : texture(albedo_map, VertexOut.uv * albedo_map_uv_scale);
   float fMetallic = textureSize(metallic_map, 0) == ivec2(0) ? metallic : texture(metallic_map, VertexOut.uv * metallic_map_uv_scale).b;
   result.metallic = fMetallic > 0.1;
   result.roughness = max(0.01, textureSize(roughness_map, 0) == ivec2(0) ? roughness : texture(roughness_map, VertexOut.uv * roughness_map_uv_scale).g);
@@ -142,7 +142,7 @@ Material evalMaterial() {
 vec3 schlickFresnel(Material mat, float LDotH) {
   vec3 f0 = vec3(0.04); // dielectric
   if (mat.metallic) {
-    f0 = mat.albedo;
+    f0 = mat.albedo.rgb;
   }
 
   return f0 + (1 - f0) * pow(1.0 - LDotH, 5);
@@ -193,11 +193,11 @@ float map(float value, float min1, float max1, float min2, float max2) {
 
 vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
   int csm_split_idx = getCSMSplit(light_idx, P.z);
-  mat.albedo = mix(mat.albedo, csm_split_colors[csm_split_idx], 0.8);
+  mat.albedo = vec4(mix(mat.albedo.rgb, csm_split_colors[csm_split_idx], 0.8), mat.albedo.a);
 
   vec3 diffuseBrdf = vec3(0); // metallic
   if (!mat.metallic) {
-    diffuseBrdf = mat.albedo;
+    diffuseBrdf = mat.albedo.rgb;
   }
 
   // 0 - means directional, 1 - means point light
@@ -303,7 +303,7 @@ void main() {
     finalColor += microfacetModel(material, i, lights[i], VertexOut.vPos, N);
   }
 
-  FragColor = vec4(finalColor, 1.0f);
+  FragColor = vec4(finalColor, material.albedo.a);
 }
 
 

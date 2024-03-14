@@ -445,6 +445,35 @@ pub fn finish(self: *Render) void {
     const camera_projection = self.camera.projection();
     const view_proj = camera_projection.mul(self.camera.view_mat);
 
+    // Sort draw calls: opaque -> blended
+    {
+        const cmds = self.command_buffer[0..self.command_count];
+        std.mem.sortUnstable(DrawCommand, cmds, self, struct {
+            pub fn lessThan(render: *const Render, lhs: DrawCommand, rhs: DrawCommand) bool {
+                const lhs_mesh = render.assetman.resolveMesh(lhs.mesh);
+                const rhs_mesh = render.assetman.resolveMesh(rhs.mesh);
+                const lhs_material: Material = if (lhs.material_override) |mat| mat else lhs_mesh.material;
+                const rhs_material: Material = if (rhs.material_override) |mat| mat else rhs_mesh.material;
+                return switch (lhs_material.blend_mode) {
+                    .Opaque => switch (rhs_material.blend_mode) {
+                        .AlphaBlend => true,
+                        .Opaque => false,
+                    },
+                    .AlphaBlend => switch (rhs_material.blend_mode) {
+                        .Opaque => false,
+                        .AlphaBlend => {
+                            const lhs_view_pos = render.camera.view_mat.mulByVec4(lhs.transform.extractTranslation().toVec4(1));
+                            const rhs_view_pos = render.camera.view_mat.mulByVec4(rhs.transform.extractTranslation().toVec4(1));
+
+                            // Back to front sorting. View pos has negative Z
+                            return lhs_view_pos.z() < rhs_view_pos.z();
+                        },
+                    },
+                };
+            }
+        }.lessThan);
+    }
+
     if (self.update_view_frustum) {
         self.camera_view_proj = view_proj;
         self.world_camera_frustum = math.Frustum.new(view_proj);
@@ -698,6 +727,9 @@ pub fn finish(self: *Render) void {
     gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
     gl.bindVertexArray(self.mesh_vao);
 
+    var switched_to_alpha_blend = false;
+    gl.disable(gl.BLEND);
+
     var rendered_count: usize = 0;
     for (self.command_buffer[0..self.command_count]) |*cmd| {
         const mesh = self.assetman.resolveMesh(cmd.mesh);
@@ -710,9 +742,18 @@ pub fn finish(self: *Render) void {
 
         const material: Material = if (cmd.material_override) |mat| mat else mesh.material;
 
+        // Opaque objects are drawn, start rendering alpha blended objects
+        {
+            if (material.blend_mode == .AlphaBlend and !switched_to_alpha_blend) {
+                switched_to_alpha_blend = true;
+                gl.enable(gl.BLEND);
+                gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            }
+        }
+
         gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&cmd.transform.data));
         {
-            gl.uniform3fv(Uniform.Color.value(), 1, @ptrCast(&material.albedo.data));
+            gl.uniform4fv(Uniform.Color.value(), 1, @ptrCast(&material.albedo.data));
 
             const albedo_map = self.assetman.resolveTexture(material.albedo_map);
             gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
@@ -774,6 +815,8 @@ pub fn finish(self: *Render) void {
             @ptrFromInt(mesh.indices.offset),
         );
     }
+
+    gl.disable(gl.BLEND);
 
     // Debug stuff
     {
