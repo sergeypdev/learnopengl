@@ -40,13 +40,14 @@ tripple_buffer_index: usize = MAX_FRAMES_QUEUED - 1,
 gl_fences: [MAX_FRAMES_QUEUED]?gl.GLsync = [_]?gl.GLsync{null} ** MAX_FRAMES_QUEUED,
 camera_ubo: gl.GLuint = 0,
 camera_matrices: []u8 = &.{},
-point_lights_ubo: gl.GLuint = 0,
+point_lights_ssbo: gl.GLuint = 0,
 point_lights: []u8 = &.{}, // TODO: remove
 lights: [MAX_LIGHT_COMMANDS]LightCommand = undefined,
 light_count: usize = 0,
 command_buffer: [MAX_DRAW_COMMANDS]DrawCommand = undefined,
 command_count: usize = 0,
 ubo_align: usize = 0,
+ssbo_align: usize = 0,
 shadow_vao: gl.GLuint = 0,
 shadow_texture_array: gl.GLuint = 0,
 shadow_texture_handle: gl.GLuint64 = 0,
@@ -84,12 +85,19 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
 
     gl.clipControl(gl.LOWER_LEFT, gl.ZERO_TO_ONE); // use [0, 1] depth in NDC
 
-    var buffer_align_int: gl.GLint = 0;
-    gl.getIntegerv(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT, &buffer_align_int);
+    {
+        var buffer_align_int: gl.GLint = 0;
+        gl.getIntegerv(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT, &buffer_align_int);
+        if (buffer_align_int == 0) @panic("Failed to query GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT");
+        render.ubo_align = @intCast(buffer_align_int);
+    }
 
-    if (buffer_align_int == 0) @panic("Failed to query GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT");
-
-    render.ubo_align = @intCast(buffer_align_int);
+    {
+        var buffer_align_int: gl.GLint = 0;
+        gl.getIntegerv(gl.SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &buffer_align_int);
+        if (buffer_align_int == 0) @panic("Failed to query GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT");
+        render.ssbo_align = @intCast(buffer_align_int);
+    }
 
     {
         // MESH VAO
@@ -148,24 +156,24 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
 
     // Point lights ubo
     {
-        gl.createBuffers(1, &render.point_lights_ubo);
+        gl.createBuffers(1, &render.point_lights_ssbo);
         std.debug.assert(render.camera_ubo != 0);
 
-        const buf_size = render.uboAlignedSizeOf(LightArray) * MAX_FRAMES_QUEUED;
+        const buf_size = render.ssboAlign(@sizeOf(LightArraySSBO) + Light.sizeOfStd430() * MAX_LIGHTS) * MAX_FRAMES_QUEUED;
         gl.namedBufferStorage(
-            render.point_lights_ubo,
+            render.point_lights_ssbo,
             @intCast(buf_size),
             null,
             PERSISTENT_BUFFER_FLAGS,
         );
         const point_lights_c: [*]u8 = @ptrCast(gl.mapNamedBufferRange(
-            render.point_lights_ubo,
+            render.point_lights_ssbo,
             0,
             @intCast(buf_size),
             PERSISTENT_BUFFER_FLAGS,
         ) orelse {
             checkGLError();
-            @panic("bind point_lights_ubo");
+            @panic("bind point_lights_ssbo");
         });
         render.point_lights = point_lights_c[0..buf_size];
     }
@@ -391,21 +399,22 @@ pub fn begin(self: *Render) void {
     }
 }
 
-fn getLightBuffer(self: *Render) *LightArray {
-    return @alignCast(@ptrCast(self.point_lights[self.tripple_buffer_index * self.uboAlignedSizeOf(LightArray) ..].ptr));
+fn getLightBuffer(self: *Render) *LightArraySSBO {
+    return @alignCast(@ptrCast(self.point_lights[self.tripple_buffer_index * self.ssboAlign(@sizeOf(LightArraySSBO) + Light.sizeOfStd430() * MAX_LIGHTS) ..].ptr));
 }
 
 // TODO: get rid of this
 pub fn flushUBOs(self: *Render) void {
     const idx = self.tripple_buffer_index;
 
-    // gl.flushMappedNamedBufferRange(self.point_lights_ubo, idx * @sizeOf(PointLightArray), @sizeOf(PointLightArray));
+    const light_array_size = self.ssboAlign(@sizeOf(LightArraySSBO) + Light.sizeOfStd430() * MAX_LIGHTS);
+    // gl.flushMappedNamedBufferRange(self.point_lights_ssbo, idx * @sizeOf(PointLightArray), @sizeOf(PointLightArray));
     gl.bindBufferRange(
-        gl.UNIFORM_BUFFER,
-        UBO.PointLights.value(),
-        self.point_lights_ubo,
-        idx * self.uboAlignedSizeOf(LightArray),
-        @intCast(self.uboAlignedSizeOf(LightArray)),
+        gl.SHADER_STORAGE_BUFFER,
+        SSBO.PointLights.value(),
+        self.point_lights_ssbo,
+        idx * light_array_size,
+        @intCast(light_array_size),
     );
     checkGLError();
 }
@@ -497,6 +506,7 @@ pub fn finish(self: *Render) void {
 
     const lights_buf = self.getLightBuffer();
     lights_buf.count = 0;
+    const lights_buf_lights = lights_buf.getLights();
 
     var dir_view_proj_mat: [CSM_SPLITS]Mat4 = undefined;
 
@@ -513,9 +523,9 @@ pub fn finish(self: *Render) void {
 
         for (lights) |light_cmd| {
             const i = lights_buf.count;
-            if (i == lights_buf.lights.len) break;
+            if (i == lights_buf_lights.len) break;
 
-            const light = &lights_buf.lights[i];
+            const light = &lights_buf_lights[i];
             lights_buf.count += 1;
 
             switch (light_cmd) {
@@ -697,7 +707,7 @@ pub fn finish(self: *Render) void {
     }
 
     // Light world space to view space
-    for (lights_buf.lights[0..lights_buf.count]) |*light| {
+    for (lights_buf_lights[0..lights_buf.count]) |*light| {
         light.pos = self.camera.view_mat.mulByVec4(light.pos);
     }
 
@@ -1093,9 +1103,15 @@ pub const Attrib = enum(gl.GLuint) {
 };
 pub const UBO = enum(gl.GLuint) {
     CameraMatrices = 0,
-    PointLights = 1,
 
     pub inline fn value(self: UBO) gl.GLuint {
+        return @intFromEnum(self);
+    }
+};
+pub const SSBO = enum(gl.GLuint) {
+    PointLights = 1,
+
+    pub inline fn value(self: SSBO) gl.GLuint {
         return @intFromEnum(self);
     }
 };
@@ -1169,14 +1185,38 @@ pub const Light = extern struct {
         csm_split_count: f32,
     },
     csm_split_points: [4]f32 = undefined,
+
+    /// Alignment of this struct if it was in a std430 array
+    pub fn alignStd430() usize {
+        return 16;
+    }
+
+    /// Aligned size of this struct if it was in a std430 array
+    pub fn sizeOfStd430() usize {
+        return std.mem.alignForward(usize, @sizeOf(Light), Light.alignStd430());
+    }
 };
 
 // TODO: rename
-pub const LightArray = extern struct {
-    lights: [MAX_LIGHTS]Light align(16),
+pub const LightArraySSBO = extern struct {
     count: c_uint,
+    // Zero sized field that just has the right alignment
+    _lights_start: [0]Light align(Light.alignStd430()),
+
+    pub fn getLights(self: *LightArraySSBO) []align(Light.alignStd430()) Light {
+        var lights_c: [*]align(Light.alignStd430()) Light = @ptrFromInt(@intFromPtr(self) + @offsetOf(LightArraySSBO, "_lights_start"));
+        return lights_c[0..MAX_LIGHTS];
+    }
 };
 
 fn uboAlignedSizeOf(self: *const Render, comptime T: type) usize {
     return std.mem.alignForward(usize, @sizeOf(T), self.ubo_align);
+}
+
+fn ssboAlign(self: *const Render, size: usize) usize {
+    return std.mem.alignForward(usize, size, self.ssbo_align);
+}
+
+fn ssboAlignedSizeOf(self: *const Render, comptime T: type) usize {
+    return self.ssboAlign(@sizeOf(T));
 }

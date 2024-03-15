@@ -27,9 +27,9 @@ layout(std140, binding = 0) uniform Matrices {
   mat4 view;
 };
 
-layout(std140, binding = 1) uniform Lights {
-  Light lights[MAX_POINT_LIGHTS];
+layout(std430, binding = 1) readonly buffer Lights {
   uint lights_count;
+  Light lights[];
 };
 
 int getShadowMapIndex(int lightIdx) {
