@@ -20,6 +20,7 @@ pub const MAX_LIGHTS = 8;
 pub const MAX_DRAW_COMMANDS = 4096;
 pub const MAX_LIGHT_COMMANDS = 2048;
 pub const CSM_SPLITS = 4;
+pub const DIRECTIONAL_SHADOW_MAP_SIZE = 2048;
 // affects how cascades are split
 // 0 - uniform
 // 1 - exponential
@@ -176,7 +177,7 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
             checkGLError();
             std.debug.assert(render.shadow_texture_array != 0);
 
-            gl.textureStorage3D(render.shadow_texture_array, 1, gl.DEPTH_COMPONENT16, 2048, 2048, CSM_SPLITS);
+            gl.textureStorage3D(render.shadow_texture_array, 1, gl.DEPTH_COMPONENT16, DIRECTIONAL_SHADOW_MAP_SIZE, DIRECTIONAL_SHADOW_MAP_SIZE, CSM_SPLITS);
             checkGLError();
 
             gl.textureParameteri(render.shadow_texture_array, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
@@ -521,7 +522,7 @@ pub fn finish(self: *Render) void {
                 .directional => |dir_light| {
                     light.pos = dir_light.dir.toVec4(0);
                     light.color_radius = dir_light.color.toVec4(0);
-                    gl.viewport(0, 0, 2048, 2048);
+                    gl.viewport(0, 0, DIRECTIONAL_SHADOW_MAP_SIZE, DIRECTIONAL_SHADOW_MAP_SIZE);
 
                     const camera_matrix = &self.shadow_matrices;
 
@@ -562,8 +563,8 @@ pub fn finish(self: *Render) void {
                         var projection: Mat4 = undefined;
 
                         {
+                            var camera = self.camera.*;
                             if (self.update_view_frustum) {
-                                var camera = self.camera.*;
                                 camera.near = split_near;
                                 camera.far = split_far;
                                 const inv_csm_proj = camera.projection().mul(camera.view_mat).inv();
@@ -574,39 +575,55 @@ pub fn finish(self: *Render) void {
                                 }
                             }
 
-                            var dir_aabb_min = Vec3.zero();
-                            var dir_aabb_max = Vec3.zero();
-                            for (self.world_view_frustum_corners[split_idx]) |corner| {
-                                const pos4 = view.mulByVec4(corner.toVec4(1));
-                                const pos = pos4.toVec3();
-                                dir_aabb_min = pos.min(dir_aabb_min);
-                                dir_aabb_max = pos.max(dir_aabb_max);
+                            // Find minimal bounding sphere for a frustum
+                            // Taken from:
+                            // https://lxjk.github.io/2017/04/15/Calculate-Minimal-Bounding-Sphere-of-Frustum.html
+                            const inv_aspect_sqr = (camera.aspect) * (camera.aspect);
+                            const k = @sqrt(1 + inv_aspect_sqr) * @tan(za.toRadians(camera.fovy) / 2);
+
+                            var center = Vec3.zero();
+                            var radius: f32 = 0;
+                            if (k * k >= (camera.far - camera.near) / (camera.far + camera.near)) {
+                                center = Vec3.new(0, 0, -camera.far);
+                                radius = camera.far * k;
+                            } else {
+                                center = Vec3.new(0, 0, -0.5 * (camera.far + camera.near) * (1 + k * k));
+                                radius = 0.5 * @sqrt((camera.far - camera.near) * (camera.far - camera.near) + 2 * (camera.far * camera.far + camera.near * camera.near) * k * k + (camera.far + camera.near) * (camera.far + camera.near) * k * k * k * k);
                             }
-                            // Flip z because it's negative in view space, but near, far is positive
-                            {
-                                const min_z = dir_aabb_min.z();
-                                dir_aabb_min.zMut().* = -dir_aabb_max.z();
-                                dir_aabb_max.zMut().* = -min_z;
-                            }
-                            const b_sphere = math.AABB.fromMinMax(dir_aabb_min, dir_aabb_max).toSphere();
+
+                            center = camera.view_mat.inv().mulByVec4(center.toVec4(1)).toVec3();
+                            center = view.mulByVec4(center.toVec4(1)).toVec3();
 
                             // NOTE: Use bounding sphere instead of AABB to prevent split size changing with rotation
                             projection = math.orthographic(
-                                b_sphere.origin.x() - b_sphere.radius,
-                                b_sphere.origin.x() + b_sphere.radius,
-                                b_sphere.origin.y() - b_sphere.radius,
-                                b_sphere.origin.y() + b_sphere.radius,
-                                b_sphere.origin.z() - b_sphere.radius,
-                                b_sphere.origin.z() + b_sphere.radius,
+                                center.x() - radius - 0.0001,
+                                center.x() + radius,
+                                center.y() - radius,
+                                center.y() + radius,
+                                -center.z() - radius,
+                                -center.z() + radius,
                             );
+                        }
+
+                        var shadow_view_proj = projection.mul(view);
+
+                        // Snap to texels
+                        {
+                            var shadow_origin = shadow_view_proj.mulByVec4(Vec4.new(0, 0, 0, 1));
+                            shadow_origin = shadow_origin.scale(1.0 / shadow_origin.w());
+                            shadow_origin = shadow_origin.scale(DIRECTIONAL_SHADOW_MAP_SIZE / 2);
+                            var rounded_origin: Vec4 = undefined;
+                            rounded_origin.data = @round(shadow_origin.data);
+                            var offset = rounded_origin.sub(shadow_origin).toVec2().toVec3(0);
+                            offset = offset.scale(2.0 / @as(f32, DIRECTIONAL_SHADOW_MAP_SIZE));
+                            projection = projection.translate(offset);
+                            shadow_view_proj = projection.mul(view);
                         }
 
                         camera_matrix.* = .{
                             .view = view,
                             .projection = projection,
                         };
-
-                        const shadow_view_proj = projection.mul(view);
                         dir_view_proj_mat[split_idx] = shadow_view_proj;
                         const light_frustum = math.Frustum.new(shadow_view_proj);
 
@@ -1116,6 +1133,8 @@ pub const Uniform = enum(gl.GLint) {
 
 // TODO: support ortho
 pub const Camera = struct {
+    pos: Vec3 = Vec3.zero(),
+
     fovy: f32 = 60,
     aspect: f32 = 1,
     near: f32 = 0.1,

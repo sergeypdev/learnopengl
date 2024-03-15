@@ -74,7 +74,8 @@ pub const FreeLookCamera = struct {
         const movement = right.scale(move.x()).add(forward.scale(move.y())).add(up.scale(move.z()));
 
         self.pos = self.pos.add(movement.scale(self.move_speed * dt));
-
+        // TODO: refactor
+        self.camera.pos = self.pos;
         self.camera.view_mat = Mat4.lookAt(self.pos, self.pos.add(forward), Vec3.up());
     }
 };

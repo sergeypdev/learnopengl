@@ -230,8 +230,7 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .mesh = .{
             .handle = a.Meshes.plane.Plane,
             .material = .{
-                .blend_mode = .AlphaBlend,
-                .albedo = Vec4.new(1, 1, 1, 0.5),
+                .albedo = Vec4.one(),
                 .normal_map = a.Textures.@"tile.norm",
             },
             .override_material = true,

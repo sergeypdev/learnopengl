@@ -193,7 +193,8 @@ float map(float value, float min1, float max1, float min2, float max2) {
 
 vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
   int csm_split_idx = getCSMSplit(light_idx, P.z);
-  mat.albedo = vec4(mix(mat.albedo.rgb, csm_split_colors[csm_split_idx], 0.8), mat.albedo.a);
+  // Visualize CSM splits
+  //mat.albedo = vec4(mix(mat.albedo.rgb, csm_split_colors[csm_split_idx], 0.8), mat.albedo.a);
 
   vec3 diffuseBrdf = vec3(0); // metallic
   if (!mat.metallic) {
