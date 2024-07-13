@@ -25,8 +25,8 @@ pub fn build(b: *Build) void {
 
     const zalgebra_dep = b.dependency("zalgebra", .{});
 
-    const assets_mod = b.addModule("assets", .{ .root_source_file = .{ .path = "src/assets/root.zig" } });
-    const asset_manifest_mod = b.addModule("asset_manifest", .{ .root_source_file = .{ .path = "src/gen/asset_manifest.zig" } });
+    const assets_mod = b.addModule("assets", .{ .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/assets/root.zig" } } });
+    const asset_manifest_mod = b.addModule("asset_manifest", .{ .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/gen/asset_manifest.zig" } } });
     asset_manifest_mod.addImport("assets", assets_mod);
 
     const assets_step = b.step("assets", "Build and install assets");
@@ -47,12 +47,12 @@ pub fn build(b: *Build) void {
 
     const lib = b.addSharedLibrary(.{
         .name = "learnopengl",
-        .root_source_file = .{ .path = "src/game.zig" },
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/game.zig" } },
         .target = target,
         .optimize = optimize,
     });
     const lib_unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/game.zig" },
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/game.zig" } },
         .target = target,
         .optimize = optimize,
     });
@@ -71,15 +71,17 @@ pub fn build(b: *Build) void {
         .name = "learnopengl",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/main.zig" } },
         .target = target,
         .optimize = optimize,
     });
 
     if (b.systemIntegrationOption("SDL2", .{ .default = b.host.result.os.tag != .windows })) {
         exe.linkSystemLibrary("SDL2");
+        exe.linkLibC();
         inline for (lib_compiles) |l| {
             l.linkSystemLibrary("SDL2");
+            l.linkLibC();
         }
     } else {
         const sdl_dep = b.dependency("SDL", .{
@@ -128,7 +130,7 @@ pub fn build(b: *Build) void {
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const exe_unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/main.zig" } },
         .target = target,
         .optimize = optimize,
     });
@@ -190,7 +192,7 @@ fn buildAssets(b: *std.Build, install_assetc_step: *Step, step: *Step, assetc: *
         run_assetc.addPathDir(b.pathFromRoot("libs/ispc_texcomp/lib"));
 
         // Absolute input file arg, this will add it to step deps, cache and all that good stuff
-        run_assetc.addFileArg(.{ .path = b.pathJoin(&.{ path, entry.path }) });
+        run_assetc.addFileArg(.{ .src_path = .{ .owner = b, .sub_path = b.pathJoin(&.{ path, entry.path }) } });
 
         // Generated output dir. Output asset(s) will be placed there at the same relative path as input
         const result_dir = run_assetc.addOutputFileArg("assets");
@@ -220,7 +222,7 @@ fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode, assets_mod:
     const assetc = b.addExecutable(.{
         .name = "assetc",
         .target = b.host,
-        .root_source_file = .{ .path = "tools/asset_compiler.zig" },
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "tools/asset_compiler.zig" } },
         .optimize = optimize,
     });
     assetc.linkLibC();
@@ -229,12 +231,12 @@ fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode, assets_mod:
         b.installFile("libs/ispc_texcomp/lib/ispc_texcomp.dll", "ispc_texcomp.dll");
         b.installFile("libs/ispc_texcomp/lib/ispc_texcomp.pdb", "ispc_texcomp.pdb");
     }
-    assetc.addLibraryPath(.{ .path = "libs/ispc_texcomp/lib" });
-    assetc.addIncludePath(.{ .path = "libs/ispc_texcomp/include" });
+    assetc.addLibraryPath(.{ .src_path = .{ .owner = b, .sub_path = "libs/ispc_texcomp/lib" } });
+    assetc.addIncludePath(.{ .src_path = .{ .owner = b, .sub_path = "libs/ispc_texcomp/include" } });
     assetc.linkSystemLibrary("ispc_texcomp");
 
     const zalgebra_mod = zalgebra_dep.module("zalgebra");
-    const formats_mod = b.addModule("formats", .{ .root_source_file = .{ .path = "src/formats.zig" } });
+    const formats_mod = b.addModule("formats", .{ .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/formats.zig" } } });
     formats_mod.addImport("zalgebra", zalgebra_mod);
     formats_mod.addImport("assets", assets_mod);
     assetc.root_module.addImport("formats", formats_mod);
@@ -245,8 +247,8 @@ fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode, assets_mod:
     assetc.linkLibC();
     assetc.linkLibCpp();
 
-    assetc.addCSourceFile(.{ .file = .{ .path = "libs/stb/stb_image.c" }, .flags = &.{"-std=c99"} });
-    assetc.addIncludePath(.{ .path = "libs/stb" });
+    assetc.addCSourceFile(.{ .file = .{ .src_path = .{ .owner = b, .sub_path = "libs/stb/stb_image.c" } }, .flags = &.{"-std=c99"} });
+    assetc.addIncludePath(.{ .src_path = .{ .owner = b, .sub_path = "libs/stb" } });
 
     return assetc;
 }

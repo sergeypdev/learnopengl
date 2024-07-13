@@ -30,7 +30,7 @@ pub fn create(b: *Build) *GenerateAssetManifest {
 }
 
 pub fn getAssetManifest(self: *const GenerateAssetManifest) Build.LazyPath {
-    return Build.LazyPath{ .generated = &self.generated_manifest };
+    return Build.LazyPath{ .generated = .{ .file = &self.generated_manifest } };
 }
 
 pub fn addAssetListFile(self: *GenerateAssetManifest, file: Build.LazyPath) void {
@@ -40,7 +40,7 @@ pub fn addAssetListFile(self: *GenerateAssetManifest, file: Build.LazyPath) void
 
 const AssetMap = std.AutoHashMap(types.AssetType, NestedAssetDef);
 
-fn make(step: *Step, prog_node: *std.Progress.Node) !void {
+fn make(step: *Step, prog_node: std.Progress.Node) !void {
     _ = prog_node; // autofix
     const b = step.owner;
     var arena = std.heap.ArenaAllocator.init(b.allocator);

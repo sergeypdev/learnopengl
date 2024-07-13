@@ -16,16 +16,16 @@
     // internet connectivity.
     .dependencies = .{
         .SDL = .{
-            .url = "https://github.com/sergeypdev/SDL/tarball/d676fac90d338b10453966bee173ffe299b6f851",
-            .hash = "12201f4fc3c26377eb3f7645cf6b2dd588b5868ba6b85e60fa36b5ea568b28243d62",
+            .url = "https://github.com/sergeypdev/SDL/tarball/9345142fc69669541ccff66dd531edf74f7055c5",
+            .hash = "122098348d9cee1436ba220e9ea1cc6056b775fa4d70681adf7b63c99c5f105b7dc0",
         },
         .@"zig-assimp" = .{
-            .url = "https://github.com/sergeypdev/zig-assimp/tarball/b10b2f03e2f3ab4a56948c583632dee61cc5fa21",
-            .hash = "1220c43c5a676ba3113f4b3c1b35d8e7eab272f87ec9e78057077e685ecee655beed",
+            .url = "https://github.com/sergeypdev/zig-assimp/tarball/dd20d3d3555136f5d108a4f5e04e0a696ed4774f",
+            .hash = "1220e845d7a9eb54d0bd93409ff594c7e8522881119521e3848bf9ba450b43d1af7c",
         },
         .zalgebra = .{
-            .url = "https://github.com/sergeypdev/zalgebra/tarball/f6aa18f74b8935887595d5793d73181d44a80735",
-            .hash = "1220fb0aa4a9e27e1e74c94072827e21114609b7122d4038e30aa9e4f66f6c6fc00d",
+            .url = "https://github.com/sergeypdev/zalgebra/tarball/43371bf211ad574cde90f653fea171f1cccb1716",
+            .hash = "1220e1439198c5206dbb924420aac0f57dd11fd4b6639e1aa9559abc09f91bfd2c9a",
         },
     },
     .paths = .{
