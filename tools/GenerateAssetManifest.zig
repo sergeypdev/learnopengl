@@ -47,7 +47,7 @@ fn make(step: *Step, prog_node: *std.Progress.Node) !void {
     defer arena.deinit();
 
     const alloc = arena.allocator();
-    const self = @fieldParentPtr(GenerateAssetManifest, "step", step);
+    const self: *GenerateAssetManifest = @fieldParentPtr("step", step);
 
     var man = b.graph.cache.obtain();
     defer man.deinit();
@@ -147,7 +147,7 @@ fn writeAssetManifest(arena: std.mem.Allocator, writer: anytype, assets: []Asset
         try writer.writeByte('\n');
     }
 
-    var buf: [std.os.PATH_MAX]u8 = undefined;
+    var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
 
     // TODO: think about building a perfect hashmap
     // AssetId -> Asset path mapping

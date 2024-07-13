@@ -16,12 +16,12 @@
     // internet connectivity.
     .dependencies = .{
         .SDL = .{
-            .url = "https://github.com/sergeypdev/SDL/tarball/fc1f821736ae929ef92d3d205cecd777b878e100",
-            .hash = "1220483cbb42231cb056f4ea6669894c68ccd560d3af5832d6e9c84c61844bc20b7d",
+            .url = "https://github.com/sergeypdev/SDL/tarball/d676fac90d338b10453966bee173ffe299b6f851",
+            .hash = "12201f4fc3c26377eb3f7645cf6b2dd588b5868ba6b85e60fa36b5ea568b28243d62",
         },
         .@"zig-assimp" = .{
-            .url = "https://github.com/sergeypdev/zig-assimp/tarball/39380dcc231788b3b54f447540bd6fea296fab10",
-            .hash = "12209b95f2f5a85107ed38814143179f1e7516440704fb94004046d6f5b5ed3c8667",
+            .url = "https://github.com/sergeypdev/zig-assimp/tarball/b10b2f03e2f3ab4a56948c583632dee61cc5fa21",
+            .hash = "1220c43c5a676ba3113f4b3c1b35d8e7eab272f87ec9e78057077e685ecee655beed",
         },
         .zalgebra = .{
             .url = "https://github.com/sergeypdev/zalgebra/tarball/f6aa18f74b8935887595d5793d73181d44a80735",

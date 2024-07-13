@@ -67,7 +67,7 @@ pub fn main() !void {
     const output_dirname = std.fs.path.dirname(output_dir_path) orelse return error.EmptyOutputPath;
 
     var cwd_buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-    const cwd_path = try std.os.getcwd(&cwd_buf);
+    const cwd_path = try std.process.getCwd(&cwd_buf);
 
     const rel_input = try std.fs.path.relative(allocator, cwd_path, abs_input);
     const rel_output = try std.fs.path.relative(allocator, cwd_path, output_dirname);
