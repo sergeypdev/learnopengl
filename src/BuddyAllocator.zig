@@ -87,27 +87,22 @@ pub fn alloc(self: *BuddyAllocator, size: usize) !Alloc {
 }
 
 pub fn free(self: *BuddyAllocator, allocation: Alloc) void {
-    if (allocation.depth == 0) {
-        std.debug.assert(self.states[0] == BlockState.Allocated);
-        self.states[0] = BlockState.Free;
-    } else {
-        const size = self.getDepthSize(@intCast(allocation.depth));
-        const depth_offset = (@as(usize, @intCast(1)) << allocation.depth) - 1;
+    const size = self.getDepthSize(@intCast(allocation.depth));
+    const depth_offset = (@as(usize, @intCast(1)) << allocation.depth) - 1;
 
-        const idx = @as(usize, @intCast(allocation.offset)) / size;
-        const node = idx + depth_offset;
+    const idx = @as(usize, @intCast(allocation.offset)) / size;
+    const node = idx + depth_offset;
 
-        std.debug.assert(self.states[node] == BlockState.Allocated);
-        self.states[node] = BlockState.Free;
+    std.debug.assert(self.states[node] == BlockState.Allocated);
+    self.states[node] = BlockState.Free;
 
-        // Merge
-        {
-            var parent = @divFloor(@as(isize, @intCast(node)) - 1, 2);
-            while (parent >= 0) : (parent = @divFloor(parent - 1, 2)) {
-                const parent_usize: usize = @intCast(parent);
-                if (self.states[parent_usize * 2 + 1] == BlockState.Free and self.states[parent_usize * 2 + 2] == BlockState.Free) {
-                    self.states[parent_usize] = BlockState.Free;
-                }
+    // Merge
+    {
+        var parent = @divFloor(@as(isize, @intCast(node)) - 1, 2);
+        while (parent >= 0) : (parent = @divFloor(parent - 1, 2)) {
+            const parent_usize: usize = @intCast(parent);
+            if (self.states[parent_usize * 2 + 1] == BlockState.Free and self.states[parent_usize * 2 + 2] == BlockState.Free) {
+                self.states[parent_usize] = BlockState.Free;
             }
         }
     }
