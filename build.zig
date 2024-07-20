@@ -247,7 +247,7 @@ fn buildAssetCompiler(b: *Build, optimize: std.builtin.OptimizeMode, assets_mod:
     assetc.linkLibC();
     assetc.linkLibCpp();
 
-    assetc.addCSourceFile(.{ .file = .{ .src_path = .{ .owner = b, .sub_path = "libs/stb/stb_image.c" } }, .flags = &.{"-std=c99"} });
+    assetc.addCSourceFile(.{ .file = b.path("libs/stb/stb_image.c"), .flags = &.{"-std=c99"} });
     assetc.addIncludePath(.{ .src_path = .{ .owner = b, .sub_path = "libs/stb" } });
 
     return assetc;

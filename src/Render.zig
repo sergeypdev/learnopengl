@@ -831,16 +831,23 @@ pub fn finish(self: *Render) void {
         gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMapCube.value(), self.cube_shadow_texture_handle);
 
         mesh.positions.bind(Render.Attrib.Position.value());
+        checkGLError();
         mesh.normals.bind(Render.Attrib.Normal.value());
+        checkGLError();
         mesh.tangents.bind(Render.Attrib.Tangent.value());
+        checkGLError();
         mesh.uvs.bind(Render.Attrib.UV.value());
+        checkGLError();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
-        gl.drawElements(
+        checkGLError();
+        gl.drawElementsBaseVertex(
             gl.TRIANGLES,
             mesh.indices.count,
             mesh.indices.type,
             @ptrFromInt(mesh.indices.offset),
+            mesh.indices.base_vertex,
         );
+        checkGLError();
     }
 
     gl.disable(gl.BLEND);
@@ -873,11 +880,12 @@ pub fn finish(self: *Render) void {
                 for (view_proj_matrices) |frustum_view_proj| {
                     const frustum_model_mat = frustum_view_proj.inv().mul(model);
                     gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&frustum_model_mat.data));
-                    gl.drawElements(
+                    gl.drawElementsBaseVertex(
                         gl.TRIANGLES,
                         mesh.indices.count,
                         mesh.indices.type,
                         @ptrFromInt(mesh.indices.offset),
+                        mesh.indices.base_vertex,
                     );
                 }
             }
@@ -893,7 +901,7 @@ pub fn finish(self: *Render) void {
                     for (self.world_view_frustum_corners[split_idx]) |corner| {
                         const model = Mat4.fromTranslate(corner);
                         gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&model.data));
-                        gl.drawElements(gl.TRIANGLES, mesh.indices.count, mesh.indices.type, @ptrFromInt(mesh.indices.offset));
+                        gl.drawElementsBaseVertex(gl.TRIANGLES, mesh.indices.count, mesh.indices.type, @ptrFromInt(mesh.indices.offset), mesh.indices.base_vertex);
                     }
                 }
             }
@@ -931,11 +939,12 @@ pub fn finish(self: *Render) void {
                 gl.viewport(0, 0, size.x(), size.y());
                 gl.uniform1i(Uniform.SRCMipLevel.value(), @intCast(src_mip_level));
 
-                gl.drawElements(
+                gl.drawElementsBaseVertex(
                     gl.TRIANGLES,
                     quad.indices.count,
                     quad.indices.type,
                     @ptrFromInt(quad.indices.offset),
+                    quad.indices.base_vertex,
                 );
             }
         }
@@ -957,11 +966,12 @@ pub fn finish(self: *Render) void {
                 gl.uniform1i(Uniform.SRCMipLevel.value(), @intCast(src_mip_level));
                 gl.uniform1f(Uniform.BloomStrength.value(), if (dst_mip_level == 0) 0.04 else 1);
 
-                gl.drawElements(
+                gl.drawElementsBaseVertex(
                     gl.TRIANGLES,
                     quad.indices.count,
                     quad.indices.type,
                     @ptrFromInt(quad.indices.offset),
+                    quad.indices.base_vertex,
                 );
             }
         }
@@ -978,12 +988,7 @@ pub fn finish(self: *Render) void {
         gl.bindTextureUnit(0, self.screen_color_texture);
         defer gl.bindTextureUnit(0, 0);
 
-        gl.drawElements(
-            gl.TRIANGLES,
-            quad.indices.count,
-            quad.indices.type,
-            @ptrFromInt(quad.indices.offset),
-        );
+        gl.drawElementsBaseVertex(gl.TRIANGLES, quad.indices.count, quad.indices.type, @ptrFromInt(quad.indices.offset), quad.indices.base_vertex);
     }
 
     self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
@@ -1051,11 +1056,12 @@ fn renderShadow(self: *Render, frustum: *const math.Frustum) void {
         mesh.positions.bind(Render.Attrib.Position.value());
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
 
-        gl.drawElements(
+        gl.drawElementsBaseVertex(
             gl.TRIANGLES,
             mesh.indices.count,
             mesh.indices.type,
             @ptrFromInt(mesh.indices.offset),
+            mesh.indices.base_vertex,
         );
     }
 }

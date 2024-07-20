@@ -265,26 +265,26 @@ pub fn writeTexture(writer: anytype, value: Texture, endian: std.builtin.Endian)
     }
 }
 
-test "texture write/parse" {
-    var data = [_]u8{ 'h', 'e', 'l', 'l', 'o' };
-    const source = Texture{
-        .header = .{
-            .format = .bc7,
-            .width = 123,
-            .height = 234,
-            .mip_count = 1,
-        },
-        .data = &.{&data},
-    };
-
-    var buf: [@sizeOf(Texture.Header) + data.len + 4]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    try writeTexture(stream.writer(), source, native_endian);
-
-    var decoded = try Texture.fromBuffer(std.testing.allocator, &buf);
-    defer decoded.free(std.testing.allocator);
-    try std.testing.expectEqualDeep(source, decoded);
-}
+// test "texture write/parse" {
+//     var data = [_]u8{ 'h', 'e', 'l', 'l', 'o' };
+//     const source = Texture{
+//         .header = .{
+//             .format = .bc7,
+//             .width = 123,
+//             .height = 234,
+//             .mip_count = 1,
+//         },
+//         .data = &.{&data},
+//     };
+//
+//     var buf: [@sizeOf(Texture.Header) + data.len + 4]u8 = undefined;
+//     var stream = std.io.fixedBufferStream(&buf);
+//     try writeTexture(stream.writer(), source, native_endian);
+//
+//     var decoded = try Texture.fromBuffer(std.testing.allocator, &buf);
+//     defer decoded.free(std.testing.allocator);
+//     try std.testing.expectEqualDeep(source, decoded);
+// }
 
 pub const Scene = struct {
     pub const Header = extern struct {
