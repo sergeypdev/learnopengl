@@ -19,6 +19,7 @@ pub const MAX_FRAMES_QUEUED = 3;
 pub const MAX_LIGHTS = 8;
 pub const MAX_DRAW_COMMANDS = 4096;
 pub const MAX_LIGHT_COMMANDS = 2048;
+pub const MAX_MATERIALS = MAX_DRAW_COMMANDS;
 pub const CSM_SPLITS = 4;
 pub const DIRECTIONAL_SHADOW_MAP_SIZE = 2048;
 // affects how cascades are split
@@ -40,12 +41,16 @@ tripple_buffer_index: usize = MAX_FRAMES_QUEUED - 1,
 gl_fences: [MAX_FRAMES_QUEUED]?gl.GLsync = [_]?gl.GLsync{null} ** MAX_FRAMES_QUEUED,
 camera_ubo: gl.GLuint = 0,
 camera_matrices: []u8 = &.{},
-point_lights_ssbo: gl.GLuint = 0,
-point_lights: []u8 = &.{}, // TODO: remove
 lights: [MAX_LIGHT_COMMANDS]LightCommand = undefined,
 light_count: usize = 0,
+
+lights_ssbo: LightSSBO = .{},
+materials_pbr_ssbo: MaterialPBRSSBO = .{},
+draw_cmd_data_ssbo: DrawCommandDataSSBO = .{},
+
 command_buffer: [MAX_DRAW_COMMANDS]DrawCommand = undefined,
 command_count: usize = 0,
+
 ubo_align: usize = 0,
 ssbo_align: usize = 0,
 shadow_vao: gl.GLuint = 0,
@@ -67,6 +72,8 @@ screen_mip_count: usize = 1,
 
 // VAO for post processing shaders
 post_process_vao: gl.GLuint = 0,
+
+draw_indirect_buffer: gl.GLuint = 0,
 
 // Bloom
 screen_bloom_sampler: gl.GLuint = 0,
@@ -154,28 +161,11 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         render.camera_matrices = camera_matrices_c[0..buf_size];
     }
 
-    // Point lights ubo
+    // SSBOs
     {
-        gl.createBuffers(1, &render.point_lights_ssbo);
-        std.debug.assert(render.camera_ubo != 0);
-
-        const buf_size = render.ssboAlign(@sizeOf(LightArraySSBO) + Light.sizeOfStd430() * MAX_LIGHTS) * MAX_FRAMES_QUEUED;
-        gl.namedBufferStorage(
-            render.point_lights_ssbo,
-            @intCast(buf_size),
-            null,
-            PERSISTENT_BUFFER_FLAGS,
-        );
-        const point_lights_c: [*]u8 = @ptrCast(gl.mapNamedBufferRange(
-            render.point_lights_ssbo,
-            0,
-            @intCast(buf_size),
-            PERSISTENT_BUFFER_FLAGS,
-        ) orelse {
-            checkGLError();
-            @panic("bind point_lights_ssbo");
-        });
-        render.point_lights = point_lights_c[0..buf_size];
+        render.lights_ssbo = LightSSBO.init(render.ssbo_align, MAX_LIGHTS, MAX_FRAMES_QUEUED) catch @panic("LightSSBO.init()");
+        render.materials_pbr_ssbo = MaterialPBRSSBO.init(render.ssbo_align, MAX_MATERIALS, MAX_FRAMES_QUEUED) catch @panic("MaterialPBRSSBO.init()");
+        render.draw_cmd_data_ssbo = DrawCommandDataSSBO.init(render.ssbo_align, MAX_DRAW_COMMANDS, MAX_FRAMES_QUEUED) catch @panic("DrawCommandDataSSBO.init()");
     }
 
     {
@@ -329,6 +319,14 @@ pub fn init(allocator: std.mem.Allocator, frame_arena: std.mem.Allocator, assetm
         gl.vertexArrayAttribFormat(vao, Attrib.Position.value(), 3, gl.FLOAT, gl.FALSE, 0);
     }
 
+    // Draw indirect buffer
+    {
+        gl.createBuffers(1, &render.draw_indirect_buffer);
+        std.debug.assert(render.draw_indirect_buffer != 0);
+
+        gl.namedBufferStorage(render.draw_indirect_buffer, @sizeOf(DrawIndirectCmd) * MAX_DRAW_COMMANDS, null, gl.MAP_WRITE_BIT);
+    }
+
     return render;
 }
 
@@ -399,24 +397,13 @@ pub fn begin(self: *Render) void {
     }
 }
 
-fn getLightBuffer(self: *Render) *LightArraySSBO {
-    return @alignCast(@ptrCast(self.point_lights[self.tripple_buffer_index * self.ssboAlign(@sizeOf(LightArraySSBO) + Light.sizeOfStd430() * MAX_LIGHTS) ..].ptr));
-}
-
 // TODO: get rid of this
 pub fn flushUBOs(self: *Render) void {
     const idx = self.tripple_buffer_index;
 
-    const light_array_size = self.ssboAlign(@sizeOf(LightArraySSBO) + Light.sizeOfStd430() * MAX_LIGHTS);
-    // gl.flushMappedNamedBufferRange(self.point_lights_ssbo, idx * @sizeOf(PointLightArray), @sizeOf(PointLightArray));
-    gl.bindBufferRange(
-        gl.SHADER_STORAGE_BUFFER,
-        SSBO.PointLights.value(),
-        self.point_lights_ssbo,
-        idx * light_array_size,
-        @intCast(light_array_size),
-    );
-    checkGLError();
+    self.lights_ssbo.bind(idx, SSBO.PointLights);
+    self.materials_pbr_ssbo.bind(idx, SSBO.Materials);
+    self.draw_cmd_data_ssbo.bind(idx, SSBO.DrawCommandData);
 }
 
 pub const LightKind = enum {
@@ -504,9 +491,8 @@ pub fn finish(self: *Render) void {
         }.lessThan);
     }
 
-    const lights_buf = self.getLightBuffer();
-    lights_buf.count = 0;
-    const lights_buf_lights = lights_buf.getLights();
+    const lights_buf = self.lights_ssbo.getInstance(self.tripple_buffer_index);
+    lights_buf.count.* = 0;
 
     var dir_view_proj_mat: [CSM_SPLITS]Mat4 = undefined;
 
@@ -522,11 +508,11 @@ pub fn finish(self: *Render) void {
         gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.shadow).program);
 
         for (lights) |light_cmd| {
-            const i = lights_buf.count;
-            if (i == lights_buf_lights.len) break;
+            const i = lights_buf.count.*;
+            if (i == lights_buf.data.len) break;
 
-            const light = &lights_buf_lights[i];
-            lights_buf.count += 1;
+            const light = &lights_buf.data[i];
+            lights_buf.count.* += 1;
 
             switch (light_cmd) {
                 .directional => |dir_light| {
@@ -707,7 +693,7 @@ pub fn finish(self: *Render) void {
     }
 
     // Light world space to view space
-    for (lights_buf_lights[0..lights_buf.count]) |*light| {
+    for (lights_buf.data[0..lights_buf.count.*]) |*light| {
         light.pos = self.camera.view_mat.mulByVec4(light.pos);
     }
 
@@ -754,101 +740,80 @@ pub fn finish(self: *Render) void {
     gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
     gl.bindVertexArray(self.mesh_vao);
 
-    var switched_to_alpha_blend = false;
+    const switched_to_alpha_blend = false;
     gl.disable(gl.BLEND);
 
+    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
+    checkGLError();
+    self.assetman.vertex_heap.normals.bind(Render.Attrib.Normal.value());
+    checkGLError();
+    self.assetman.vertex_heap.tangents.bind(Render.Attrib.Tangent.value());
+    checkGLError();
+    self.assetman.vertex_heap.uvs.bind(Render.Attrib.UV.value());
+    checkGLError();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
+    checkGLError();
+
+    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMap2D.value(), self.shadow_texture_handle);
+    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMapCube.value(), self.cube_shadow_texture_handle);
+
+    const draw_indirect_cmds_c: [*]u8 = @ptrCast(gl.mapNamedBuffer(
+        self.draw_indirect_buffer,
+        gl.WRITE_ONLY,
+    ) orelse {
+        checkGLError();
+        @panic("map draw indirect buffer");
+    });
+    var draw_indirect_cmds = std.mem.bytesAsSlice(DrawIndirectCmd, draw_indirect_cmds_c[0 .. @sizeOf(DrawIndirectCmd) * MAX_DRAW_COMMANDS]);
+
+    const materials = self.materials_pbr_ssbo.getInstance(self.tripple_buffer_index);
+    materials.count.* = 0;
+
+    const draw_cmd_data = self.draw_cmd_data_ssbo.getInstance(self.tripple_buffer_index);
+
     var rendered_count: usize = 0;
-    for (self.command_buffer[0..self.command_count]) |*cmd| {
+    cmds: for (self.command_buffer[0..self.command_count]) |*cmd| {
         const mesh = self.assetman.resolveMesh(cmd.mesh);
         const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
 
         if (!self.world_camera_frustum.intersectAABB(aabb.transform(cmd.transform))) {
             continue;
         }
-        rendered_count += 1;
 
         const material: Material = if (cmd.material_override) |mat| mat else mesh.material;
 
         // Opaque objects are drawn, start rendering alpha blended objects
-        {
-            if (material.blend_mode == .AlphaBlend and !switched_to_alpha_blend) {
-                switched_to_alpha_blend = true;
-                gl.enable(gl.BLEND);
-                gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-            }
+        if (material.blend_mode == .AlphaBlend and !switched_to_alpha_blend) {
+            break :cmds;
+            // switched_to_alpha_blend = true;
+            // gl.enable(gl.BLEND);
+            // gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         }
 
-        gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&cmd.transform.data));
-        {
-            gl.uniform4fv(Uniform.Color.value(), 1, @ptrCast(&material.albedo.data));
+        draw_cmd_data.data[rendered_count] = DrawCommandData{
+            .transform = cmd.transform,
+        };
 
-            const albedo_map = self.assetman.resolveTexture(material.albedo_map);
-            gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-                Uniform.AlbedoMap.value(),
-                albedo_map.handle,
-            );
-            gl.uniform2fv(Uniform.AlbedoMapUVScale.value(), 1, @ptrCast(&albedo_map.uv_scale.data));
-        }
-        {
-            const normal_map = self.assetman.resolveTexture(material.normal_map);
-            gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-                Uniform.NormalMap.value(),
-                normal_map.handle,
-            );
-            gl.uniform2fv(Uniform.NormalMapUVScale.value(), 1, @ptrCast(&normal_map.uv_scale.data));
-        }
-        {
-            gl.uniform1fv(Uniform.Metallic.value(), 1, &material.metallic);
+        materials.data[rendered_count] = MaterialPBR.fromMaterial(self.assetman, &material);
+        materials.count.* += 1;
 
-            const metallic_map = self.assetman.resolveTexture(material.metallic_map);
-            gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-                Uniform.MetallicMap.value(),
-                metallic_map.handle,
-            );
-            gl.uniform2fv(Uniform.MetallicMapUVScale.value(), 1, @ptrCast(&metallic_map.uv_scale.data));
-        }
-        {
-            gl.uniform1fv(Uniform.Roughness.value(), 1, &material.roughness);
+        draw_indirect_cmds[rendered_count] = DrawIndirectCmd{
+            .count = mesh.indices.count,
+            .instance_count = 1,
+            .first_index = mesh.indices.offset / 4,
+            .base_vertex = mesh.indices.base_vertex,
+            .base_instance = 0,
+            .transform = cmd.transform,
+        };
 
-            const roughness_map = self.assetman.resolveTexture(material.roughness_map);
-            gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-                Uniform.RoughnessMap.value(),
-                roughness_map.handle,
-            );
-            gl.uniform2fv(Uniform.RoughnessMapUVScale.value(), 1, @ptrCast(&roughness_map.uv_scale.data));
-        }
-        {
-            gl.uniform3fv(Uniform.Emission.value(), 1, @ptrCast(&material.emission.data));
-
-            const emission_map = self.assetman.resolveTexture(material.emission_map);
-            gl.GL_ARB_bindless_texture.uniformHandleui64ARB(
-                Uniform.EmissionMap.value(),
-                emission_map.handle,
-            );
-            gl.uniform2fv(Uniform.EmissionMapUVScale.value(), 1, @ptrCast(&emission_map.uv_scale.data));
-        }
-        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMap2D.value(), self.shadow_texture_handle);
-        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMapCube.value(), self.cube_shadow_texture_handle);
-
-        mesh.positions.bind(Render.Attrib.Position.value());
-        checkGLError();
-        mesh.normals.bind(Render.Attrib.Normal.value());
-        checkGLError();
-        mesh.tangents.bind(Render.Attrib.Tangent.value());
-        checkGLError();
-        mesh.uvs.bind(Render.Attrib.UV.value());
-        checkGLError();
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
-        checkGLError();
-        gl.drawElementsBaseVertex(
-            gl.TRIANGLES,
-            mesh.indices.count,
-            mesh.indices.type,
-            @ptrFromInt(mesh.indices.offset),
-            mesh.indices.base_vertex,
-        );
-        checkGLError();
+        rendered_count += 1;
     }
+
+    _ = gl.unmapNamedBuffer(self.draw_indirect_buffer);
+
+    gl.bindBuffer(gl.DRAW_INDIRECT_BUFFER, self.draw_indirect_buffer);
+
+    gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(rendered_count), @sizeOf(DrawIndirectCmd));
 
     gl.disable(gl.BLEND);
 
@@ -882,7 +847,7 @@ pub fn finish(self: *Render) void {
                     gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&frustum_model_mat.data));
                     gl.drawElementsBaseVertex(
                         gl.TRIANGLES,
-                        mesh.indices.count,
+                        @intCast(mesh.indices.count),
                         mesh.indices.type,
                         @ptrFromInt(mesh.indices.offset),
                         mesh.indices.base_vertex,
@@ -901,7 +866,7 @@ pub fn finish(self: *Render) void {
                     for (self.world_view_frustum_corners[split_idx]) |corner| {
                         const model = Mat4.fromTranslate(corner);
                         gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&model.data));
-                        gl.drawElementsBaseVertex(gl.TRIANGLES, mesh.indices.count, mesh.indices.type, @ptrFromInt(mesh.indices.offset), mesh.indices.base_vertex);
+                        gl.drawElementsBaseVertex(gl.TRIANGLES, @intCast(mesh.indices.count), mesh.indices.type, @ptrFromInt(mesh.indices.offset), mesh.indices.base_vertex);
                     }
                 }
             }
@@ -941,7 +906,7 @@ pub fn finish(self: *Render) void {
 
                 gl.drawElementsBaseVertex(
                     gl.TRIANGLES,
-                    quad.indices.count,
+                    @intCast(quad.indices.count),
                     quad.indices.type,
                     @ptrFromInt(quad.indices.offset),
                     quad.indices.base_vertex,
@@ -968,7 +933,7 @@ pub fn finish(self: *Render) void {
 
                 gl.drawElementsBaseVertex(
                     gl.TRIANGLES,
-                    quad.indices.count,
+                    @intCast(quad.indices.count),
                     quad.indices.type,
                     @ptrFromInt(quad.indices.offset),
                     quad.indices.base_vertex,
@@ -988,7 +953,7 @@ pub fn finish(self: *Render) void {
         gl.bindTextureUnit(0, self.screen_color_texture);
         defer gl.bindTextureUnit(0, 0);
 
-        gl.drawElementsBaseVertex(gl.TRIANGLES, quad.indices.count, quad.indices.type, @ptrFromInt(quad.indices.offset), quad.indices.base_vertex);
+        gl.drawElementsBaseVertex(gl.TRIANGLES, @intCast(quad.indices.count), quad.indices.type, @ptrFromInt(quad.indices.offset), quad.indices.base_vertex);
     }
 
     self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
@@ -1058,7 +1023,7 @@ fn renderShadow(self: *Render, frustum: *const math.Frustum) void {
 
         gl.drawElementsBaseVertex(
             gl.TRIANGLES,
-            mesh.indices.count,
+            @intCast(mesh.indices.count),
             mesh.indices.type,
             @ptrFromInt(mesh.indices.offset),
             mesh.indices.base_vertex,
@@ -1116,11 +1081,58 @@ pub const UBO = enum(gl.GLuint) {
 };
 pub const SSBO = enum(gl.GLuint) {
     PointLights = 1,
+    Materials = 2,
+    DrawCommandData = 3,
 
     pub inline fn value(self: SSBO) gl.GLuint {
         return @intFromEnum(self);
     }
 };
+
+pub fn getStd430Align(comptime T: type) usize {
+    switch (T) {
+        Vec2, Vec2_i32 => {
+            return 8;
+        },
+        Vec3, Vec4 => {
+            return 16;
+        },
+        Mat4 => {
+            return 16;
+        },
+    }
+
+    const info = @typeInfo(T);
+    switch (info) {
+        .Int => |int| {
+            if (int.bits & (int.bits - 1) != 0) {
+                @compileError("Non power of two bit size of int");
+            }
+            const byte_size = int.bits / 8;
+
+            return @intCast(byte_size);
+        },
+        .Float => |float| {
+            if (float.bits & (float.bits - 1) != 0) {
+                @compileError("Non power of two bit size of float");
+            }
+            const byte_size = float.bits / 8;
+
+            return @intCast(byte_size);
+        },
+        .Struct => |str| {
+            if (str.layout != .@"extern") {
+                @compileError("Structs should be extern for std430");
+            }
+
+            // inline for (str.fields) |field| {
+            //     field.
+            // }
+            return 0;
+        },
+        _ => @compileError("Unknown type for std430 " ++ @typeName(T)),
+    }
+}
 
 pub const Uniform = enum(gl.GLint) {
     ModelMatrix = 1,
@@ -1194,25 +1206,205 @@ pub const Light = extern struct {
 
     /// Alignment of this struct if it was in a std430 array
     pub fn alignStd430() usize {
-        return 16;
+        return @alignOf(Light);
     }
 
     /// Aligned size of this struct if it was in a std430 array
     pub fn sizeOfStd430() usize {
-        return std.mem.alignForward(usize, @sizeOf(Light), Light.alignStd430());
+        return @sizeOf(Light);
+        // return std.mem.alignForward(usize, @sizeOf(Light), Light.alignStd430());
     }
 };
 
-// TODO: rename
-pub const LightArraySSBO = extern struct {
-    count: c_uint,
-    // Zero sized field that just has the right alignment
-    _lights_start: [0]Light align(Light.alignStd430()),
+const LightSSBO = BufferSSBO(Light);
 
-    pub fn getLights(self: *LightArraySSBO) []align(Light.alignStd430()) Light {
-        var lights_c: [*]align(Light.alignStd430()) Light = @ptrFromInt(@intFromPtr(self) + @offsetOf(LightArraySSBO, "_lights_start"));
-        return lights_c[0..MAX_LIGHTS];
+// Shader struct for material data
+pub const MaterialPBR = extern struct {
+    albedo: Vec4,
+    albedo_map: gl.GLuint64,
+    albedo_map_uv_scale: Vec2,
+    normal_map: gl.GLuint64,
+    normal_map_uv_scale: Vec2,
+    metallic: f32,
+    metallic_map: gl.GLuint64,
+    metallic_map_uv_scale: Vec2,
+    roughness: f32,
+    roughness_map: gl.GLuint64,
+    roughness_map_uv_scale: Vec2,
+    emission: Vec3 align(16),
+    emission_map: gl.GLuint64,
+    emission_map_uv_scale: Vec2,
+
+    pub fn fromMaterial(assetman: *AssetManager, mat: *const Material) MaterialPBR {
+        const albedo_map = assetman.resolveTexture(mat.albedo_map);
+        const normal_map = assetman.resolveTexture(mat.normal_map);
+        const metallic_map = assetman.resolveTexture(mat.metallic_map);
+        const roughness_map = assetman.resolveTexture(mat.roughness_map);
+        const emission_map = assetman.resolveTexture(mat.emission_map);
+        return .{
+            .albedo = mat.albedo,
+            .albedo_map = albedo_map.handle,
+            .albedo_map_uv_scale = albedo_map.uv_scale,
+            .normal_map = normal_map.handle,
+            .normal_map_uv_scale = normal_map.uv_scale,
+            .metallic = mat.metallic,
+            .metallic_map = metallic_map.handle,
+            .metallic_map_uv_scale = metallic_map.uv_scale,
+            .roughness = mat.roughness,
+            .roughness_map = roughness_map.handle,
+            .roughness_map_uv_scale = roughness_map.uv_scale,
+            .emission = mat.emission,
+            .emission_map = emission_map.handle,
+            .emission_map_uv_scale = emission_map.uv_scale,
+        };
     }
+
+    /// Alignment of this struct if it was in a std430 array
+    pub fn alignStd430() usize {
+        return @alignOf(MaterialPBR);
+    }
+
+    /// Aligned size of this struct if it was in a std430 array
+    pub fn sizeOfStd430() usize {
+        return @sizeOf(MaterialPBR);
+        //return std.mem.alignForward(usize, @sizeOf(MaterialPBR), MaterialPBR.alignStd430());
+    }
+};
+
+pub fn BufferSSBO(comptime T: type) type {
+    return BufferSSBOAlign(T, @alignOf(T));
+}
+
+// Helper struct for using ssbo arrays with count
+// It provides a coherent always mapped buffer
+pub fn BufferSSBOAlign(comptime T: type, comptime alignment: usize) type {
+    switch (@typeInfo(T)) {
+        .Struct => |str| {
+            if (str.layout != .@"extern") {
+                @compileError("Use extern layout for SSBO structs");
+            }
+        },
+        else => {},
+    }
+
+    return struct {
+        pub const BufferInstance = struct {
+            count: *c_uint,
+            data: []T align(alignment),
+        };
+
+        // Helper struct to calculate buffer sizes
+        // not actually used
+        const BufferLayout = extern struct {
+            count: c_uint,
+            _start: [0]T align(alignment),
+
+            pub fn calculateBufSize(max_count: usize, ssbo_align: usize) usize {
+                return std.mem.alignForward(usize, @sizeOf(BufferInstance) + @sizeOf(T) * max_count, ssbo_align);
+            }
+
+            pub fn getData(self: *BufferLayout, len: usize) []T {
+                var data_c: [*]T = @ptrFromInt(@intFromPtr(self) + @offsetOf(BufferLayout, "_start"));
+
+                return data_c[0..len];
+            }
+        };
+
+        const Self = @This();
+
+        len: usize = 0,
+        /// How many buffer instances of length `len` are in a single GL buffer
+        len_buffers: usize = 0,
+        buffer: gl.GLuint = 0,
+        data: []u8 = &.{},
+
+        // Don't like duplicating it here, but don't have a better idea
+        ssbo_align: usize = 0,
+
+        pub fn init(ssbo_align: usize, len: usize, num_buffers: usize) !Self {
+            var result = Self{
+                .len = len,
+                .len_buffers = num_buffers,
+                .ssbo_align = ssbo_align,
+            };
+
+            gl.createBuffers(1, &result.buffer);
+            if (result.buffer == 0) {
+                checkGLError();
+                return error.CreateBuffers;
+            }
+
+            const PERSISTENT_BUFFER_FLAGS: gl.GLbitfield = gl.MAP_PERSISTENT_BIT | gl.MAP_WRITE_BIT | gl.MAP_COHERENT_BIT;
+
+            const buf_size = BufferLayout.calculateBufSize(len, ssbo_align) * num_buffers;
+            gl.namedBufferStorage(
+                result.buffer,
+                @intCast(buf_size),
+                null,
+                PERSISTENT_BUFFER_FLAGS,
+            );
+            const data_c: [*]u8 = @ptrCast(gl.mapNamedBufferRange(
+                result.buffer,
+                0,
+                @intCast(buf_size),
+                PERSISTENT_BUFFER_FLAGS,
+            ) orelse {
+                checkGLError();
+                @panic("bind point_lights_ssbo");
+            });
+
+            result.data = data_c[0..buf_size];
+
+            return result;
+        }
+
+        pub fn deinit(self: *Self) void {
+            gl.deleteBuffers(1, &self.buffer);
+            self.buffer = 0;
+            self.data = &.{};
+        }
+
+        pub fn getInstance(self: *Self, index: usize) BufferInstance {
+            std.debug.assert(index < self.len_buffers);
+
+            const layout: *BufferLayout = @alignCast(@ptrCast(self.data[index * BufferLayout.calculateBufSize(self.len, self.ssbo_align) ..].ptr));
+
+            return BufferInstance{
+                .count = &layout.count,
+                .data = layout.getData(self.len),
+            };
+        }
+
+        pub fn bind(self: *const Self, idx: usize, binding: SSBO) void {
+            std.debug.assert(idx < self.len_buffers);
+
+            const size = BufferLayout.calculateBufSize(self.len, self.ssbo_align);
+            gl.bindBufferRange(
+                gl.SHADER_STORAGE_BUFFER,
+                binding.value(),
+                self.buffer,
+                idx * size,
+                @intCast(size),
+            );
+        }
+    };
+}
+
+const MaterialPBRSSBO = BufferSSBO(MaterialPBR);
+
+const DrawCommandData = extern struct {
+    transform: Mat4,
+};
+
+const DrawCommandDataSSBO = BufferSSBOAlign(DrawCommandData, 16);
+
+const DrawIndirectCmd = extern struct {
+    count: gl.GLuint,
+    instance_count: gl.GLuint,
+    first_index: gl.GLuint,
+    base_vertex: gl.GLint,
+    base_instance: gl.GLuint,
+    transform: Mat4,
 };
 
 fn uboAlignedSizeOf(self: *const Render, comptime T: type) usize {

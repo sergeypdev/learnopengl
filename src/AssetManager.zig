@@ -323,17 +323,17 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !LoadedMesh {
 
     const vertex_offset = allocation.vertex.offset;
 
-    gl.namedBufferSubData(self.vertex_heap.vertices, @intCast(vertex_offset * @sizeOf(formats.Vector3)), @intCast(vertices_len * @sizeOf(formats.Vector3)), @ptrCast(mesh.vertices.ptr));
+    gl.namedBufferSubData(self.vertex_heap.vertices.buffer, @intCast(vertex_offset * @sizeOf(formats.Vector3)), @intCast(vertices_len * @sizeOf(formats.Vector3)), @ptrCast(mesh.vertices.ptr));
     checkGLError();
-    gl.namedBufferSubData(self.vertex_heap.normals, @intCast(vertex_offset * @sizeOf(formats.Vector3)), @intCast(vertices_len * @sizeOf(formats.Vector3)), @ptrCast(mesh.normals.ptr));
+    gl.namedBufferSubData(self.vertex_heap.normals.buffer, @intCast(vertex_offset * @sizeOf(formats.Vector3)), @intCast(vertices_len * @sizeOf(formats.Vector3)), @ptrCast(mesh.normals.ptr));
     checkGLError();
-    gl.namedBufferSubData(self.vertex_heap.tangents, @intCast(vertex_offset * @sizeOf(formats.Vector3)), @intCast(vertices_len * @sizeOf(formats.Vector3)), @ptrCast(mesh.tangents.ptr));
+    gl.namedBufferSubData(self.vertex_heap.tangents.buffer, @intCast(vertex_offset * @sizeOf(formats.Vector3)), @intCast(vertices_len * @sizeOf(formats.Vector3)), @ptrCast(mesh.tangents.ptr));
     checkGLError();
-    gl.namedBufferSubData(self.vertex_heap.uvs, @intCast(vertex_offset * @sizeOf(formats.Vector2)), @intCast(vertices_len * @sizeOf(formats.Vector2)), @ptrCast(mesh.uvs.ptr));
+    gl.namedBufferSubData(self.vertex_heap.uvs.buffer, @intCast(vertex_offset * @sizeOf(formats.Vector2)), @intCast(vertices_len * @sizeOf(formats.Vector2)), @ptrCast(mesh.uvs.ptr));
     checkGLError();
 
     const index_offset = allocation.index.offset;
-    gl.namedBufferSubData(self.vertex_heap.indices, @intCast(index_offset * @sizeOf(formats.Index)), @intCast(mesh.indices.len * @sizeOf(formats.Index)), @ptrCast(mesh.indices.ptr));
+    gl.namedBufferSubData(self.vertex_heap.indices.buffer, @intCast(index_offset * @sizeOf(formats.Index)), @intCast(mesh.indices.len * @sizeOf(formats.Index)), @ptrCast(mesh.indices.ptr));
 
     const loaded_mesh = LoadedMesh{
         .aabb = .{
@@ -343,27 +343,27 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !LoadedMesh {
         .heap_handle = allocation,
         .material = mesh.material,
         .positions = .{
-            .buffer = self.vertex_heap.vertices,
+            .buffer = self.vertex_heap.vertices.buffer,
             .offset = @intCast(vertex_offset * @sizeOf(formats.Vector3)),
             .stride = @sizeOf(formats.Vector3),
         },
         .normals = .{
-            .buffer = self.vertex_heap.normals,
+            .buffer = self.vertex_heap.normals.buffer,
             .offset = @intCast(vertex_offset * @sizeOf(formats.Vector3)),
             .stride = @sizeOf(formats.Vector3),
         },
         .tangents = .{
-            .buffer = self.vertex_heap.tangents,
+            .buffer = self.vertex_heap.tangents.buffer,
             .offset = @intCast(vertex_offset * @sizeOf(formats.Vector3)),
             .stride = @sizeOf(formats.Vector3),
         },
         .uvs = .{
-            .buffer = self.vertex_heap.uvs,
+            .buffer = self.vertex_heap.uvs.buffer,
             .offset = @intCast(vertex_offset * @sizeOf(formats.Vector2)),
             .stride = @sizeOf(formats.Vector2),
         },
         .indices = .{
-            .buffer = self.vertex_heap.indices,
+            .buffer = self.vertex_heap.indices.buffer,
             .offset = @intCast(index_offset * @sizeOf(formats.Index)),
             .count = @intCast(mesh.indices.len),
             .type = gl.UNSIGNED_INT,
@@ -567,7 +567,7 @@ pub const BufferSlice = struct {
 pub const IndexSlice = struct {
     buffer: gl.GLuint,
     offset: gl.GLuint,
-    count: gl.GLsizei,
+    count: gl.GLuint,
     type: gl.GLenum,
     base_vertex: gl.GLint,
 
@@ -587,8 +587,8 @@ pub const ShaderType = enum {
         };
     }
 
-    const VERTEX_DEFINES = "#version 450 core\n#define VERTEX_SHADER 1\n#define VERTEX_EXPORT out\n";
-    const FRAGMENT_DEFINES = "#version 450 core\n#define FRAGMENT_SHADER 1\n#define VERTEX_EXPORT in\n";
+    const VERTEX_DEFINES = "#version 460 core\n#define VERTEX_SHADER 1\n#define VERTEX_EXPORT out\n";
+    const FRAGMENT_DEFINES = "#version 460 core\n#define FRAGMENT_SHADER 1\n#define VERTEX_EXPORT in\n";
     pub fn getDefines(self: ShaderType) []const u8 {
         return switch (self) {
             .vertex => VERTEX_DEFINES,
@@ -729,13 +729,29 @@ const VertexBufferHeap = struct {
         index: BuddyAllocator.Alloc = .{},
     };
 
+    pub const Buffer = struct {
+        buffer: gl.GLuint,
+        stride: gl.GLsizei,
+
+        pub fn init(name: gl.GLuint, stride: usize) Buffer {
+            return .{
+                .buffer = name,
+                .stride = @intCast(stride),
+            };
+        }
+
+        pub fn bind(self: *const Buffer, index: gl.GLuint) void {
+            gl.bindVertexBuffer(index, self.buffer, 0, self.stride);
+        }
+    };
+
     vertex_buddy: BuddyAllocator,
     index_buddy: BuddyAllocator,
-    vertices: gl.GLuint,
-    normals: gl.GLuint,
-    tangents: gl.GLuint,
-    uvs: gl.GLuint,
-    indices: gl.GLuint,
+    vertices: Buffer,
+    normals: Buffer,
+    tangents: Buffer,
+    uvs: Buffer,
+    indices: Buffer,
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         // 256 mega vertices :)
@@ -760,38 +776,38 @@ const VertexBufferHeap = struct {
             }
         }
 
-        const vertices = bufs[0];
-        const normals = bufs[1];
-        const tangents = bufs[2];
-        const uvs = bufs[3];
-        const indices = bufs[4];
+        const vertices = Buffer.init(bufs[0], @sizeOf(formats.Vector3));
+        const normals = Buffer.init(bufs[1], @sizeOf(formats.Vector3));
+        const tangents = Buffer.init(bufs[2], @sizeOf(formats.Vector3));
+        const uvs = Buffer.init(bufs[3], @sizeOf(formats.Vector2));
+        const indices = Buffer.init(bufs[4], @sizeOf(formats.Index));
 
         gl.namedBufferStorage(
-            vertices,
+            vertices.buffer,
             @intCast(vertex_buf_size * @sizeOf(formats.Vector3)),
             null,
             gl.DYNAMIC_STORAGE_BIT,
         );
         gl.namedBufferStorage(
-            normals,
+            normals.buffer,
             @intCast(vertex_buf_size * @sizeOf(formats.Vector3)),
             null,
             gl.DYNAMIC_STORAGE_BIT,
         );
         gl.namedBufferStorage(
-            tangents,
+            tangents.buffer,
             @intCast(vertex_buf_size * @sizeOf(formats.Vector3)),
             null,
             gl.DYNAMIC_STORAGE_BIT,
         );
         gl.namedBufferStorage(
-            uvs,
+            uvs.buffer,
             @intCast(vertex_buf_size * @sizeOf(formats.Vector2)),
             null,
             gl.DYNAMIC_STORAGE_BIT,
         );
         gl.namedBufferStorage(
-            indices,
+            indices.buffer,
             @intCast(index_buf_size * @sizeOf(formats.Index)),
             null,
             gl.DYNAMIC_STORAGE_BIT,

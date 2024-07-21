@@ -193,35 +193,35 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
         .rotate = .{ .axis = Vec3.up(), .rate = -10 },
     });
 
-    // const light_root = globals.g_mem.world.addEntity(.{
-    //     .flags = .{ .rotate = true },
-    //     .transform = .{ .pos = Vec3.new(0, 0.1, 0) },
-    //     .rotate = .{ .axis = Vec3.up(), .rate = 60 },
-    // });
+    const light_root = globals.g_mem.world.addEntity(.{
+        .flags = .{ .rotate = true },
+        .transform = .{ .pos = Vec3.new(0, 0.1, 0) },
+        .rotate = .{ .axis = Vec3.up(), .rate = 60 },
+    });
 
-    // const light1 = globals.g_mem.world.addEntity(.{
-    //     .transform = .{ .pos = Vec3.new(1.8, 1, 0) },
-    //     .flags = .{ .point_light = true, .rotate = true },
-    //     .light = .{ .color_intensity = Vec4.new(1.0, 0.3, 0.1, 100.0) },
-    //     .point_light = .{ .radius = 0.1 },
-    //     .rotate = .{ .axis = Vec3.up(), .rate = -40 },
-    // });
-    // light1.ptr.setParent(light_root.handle);
+    const light1 = globals.g_mem.world.addEntity(.{
+        .transform = .{ .pos = Vec3.new(1.8, 1, 0) },
+        .flags = .{ .point_light = true, .rotate = true },
+        .light = .{ .color_intensity = Vec4.new(1.0, 0.3, 0.1, 100.0) },
+        .point_light = .{ .radius = 0.1 },
+        .rotate = .{ .axis = Vec3.up(), .rate = -40 },
+    });
+    light1.ptr.setParent(light_root.handle);
 
-    // const light2 = globals.g_mem.world.addEntity(.{
-    //     .transform = .{ .pos = Vec3.new(-2, 0, 0) },
-    //     .flags = .{ .point_light = true, .rotate = true },
-    //     .light = .{ .color_intensity = Vec4.new(0.2, 0.5, 1.0, 100.0) },
-    //     .point_light = .{ .radius = 0.1 },
-    // });
-    // light2.ptr.setParent(light1.handle);
+    const light2 = globals.g_mem.world.addEntity(.{
+        .transform = .{ .pos = Vec3.new(-2, 0, 0) },
+        .flags = .{ .point_light = true, .rotate = true },
+        .light = .{ .color_intensity = Vec4.new(0.2, 0.5, 1.0, 100.0) },
+        .point_light = .{ .radius = 0.1 },
+    });
+    light2.ptr.setParent(light1.handle);
 
-    // _ = globals.g_mem.world.addEntity(.{
-    //     .transform = .{ .pos = Vec3.new(1, 0.5, 4) },
-    //     .flags = .{ .point_light = true },
-    //     .light = .{ .color_intensity = Vec4.new(0.2, 0.5, 1.0, 10.0) },
-    //     .point_light = .{ .radius = 1 },
-    // });
+    _ = globals.g_mem.world.addEntity(.{
+        .transform = .{ .pos = Vec3.new(1, 0.5, 4) },
+        .flags = .{ .point_light = true },
+        .light = .{ .color_intensity = Vec4.new(0.2, 0.5, 1.0, 10.0) },
+        .point_light = .{ .radius = 1 },
+    });
 
     // Plane
     _ = globals.g_mem.world.addEntity(.{

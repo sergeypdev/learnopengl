@@ -21,6 +21,27 @@ struct Light {
   vec4 csm_split_points; // TODO: Maybe increase to 8, though it's probably too many
 };
 
+struct Material {
+  vec4 albedo;
+  sampler2D albedo_map;
+  vec2 albedo_map_uv_scale;
+  sampler2D normal_map;
+  vec2 normal_map_uv_scale;
+  float metallic;
+  sampler2D metallic_map;
+  vec2 metallic_map_uv_scale;
+  float roughness;
+  sampler2D roughness_map;
+  vec2 roughness_map_uv_scale;
+  vec3 emission;
+  sampler2D emission_map;
+  vec2 emission_map_uv_scale;
+};
+
+struct DrawCmdData {
+  mat4 transform;
+};
+
 // UBOs
 layout(std140, binding = 0) uniform Matrices {
   mat4 projection;
@@ -30,6 +51,17 @@ layout(std140, binding = 0) uniform Matrices {
 layout(std430, binding = 1) readonly buffer Lights {
   uint lights_count;
   Light lights[];
+};
+
+layout(std430, binding = 2) readonly buffer Materials {
+  uint materials_count;
+  Material materials[];
+};
+
+layout(std430, binding = 3) readonly buffer DrawCmdDatas {
+  uint draws_count;
+  // Access by gl_DrawID
+  DrawCmdData draw_data[];
 };
 
 int getShadowMapIndex(int lightIdx) {
@@ -52,28 +84,6 @@ int getCSMSplit(int lightIdx, float depth) {
   return totalSplits - 1;
 }
 
-// Uniforms
-layout(location = 1) uniform mat4 model;
-
-layout(location = 2) uniform vec4 color;
-layout(location = 3, bindless_sampler) uniform sampler2D albedo_map;
-layout(location = 4) uniform vec2 albedo_map_uv_scale = vec2(1);
-
-layout(location = 5, bindless_sampler) uniform sampler2D normal_map;
-layout(location = 6) uniform vec2 normal_map_uv_scale = vec2(1);
-
-layout(location = 7) uniform float metallic;
-layout(location = 8, bindless_sampler) uniform sampler2D metallic_map;
-layout(location = 9) uniform vec2 metallic_map_uv_scale = vec2(1);
-
-layout(location = 10) uniform float roughness;
-layout(location = 11, bindless_sampler) uniform sampler2D roughness_map;
-layout(location = 12) uniform vec2 roughness_map_uv_scale = vec2(1);
-
-layout(location = 13) uniform vec3 emission;
-layout(location = 14, bindless_sampler) uniform sampler2D emission_map;
-layout(location = 15) uniform vec2 emission_map_uv_scale = vec2(1);
-
 layout(location = 16, bindless_sampler) uniform sampler2DArrayShadow shadow_maps;
 layout(location = 17, bindless_sampler) uniform samplerCubeArrayShadow cube_shadow_maps;
 
@@ -88,6 +98,8 @@ VERTEX_EXPORT VertexData {
   vec3 wNormal;
 } VertexOut;
 
+VERTEX_EXPORT flat int DrawID;
+
 float random(vec4 seed4) {
   float dot_product = dot(seed4, vec4(12.9898,78.233,45.164,94.673));
   return fract(sin(dot_product) * 43758.5453);
@@ -101,6 +113,8 @@ layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec3 aTangent;
 
 void main() {
+    DrawID = gl_DrawID;
+    mat4 model = draw_data[DrawID].transform;
     vec4 vPos = view * model * vec4(aPos.xyz, 1.0);
     gl_Position = projection * vPos;
 
@@ -121,25 +135,26 @@ void main() {
 
 out vec4 FragColor;
 
-struct Material {
+struct EvalMaterial {
   vec4 albedo;
   bool metallic;
   float roughness;
   vec3 emission;
 };
 
-Material evalMaterial() {
-  Material result;
-  result.albedo = textureSize(albedo_map, 0) == ivec2(0) ? vec4(pow(color.rgb, vec3(2.2)), color.a) : texture(albedo_map, VertexOut.uv * albedo_map_uv_scale);
-  float fMetallic = textureSize(metallic_map, 0) == ivec2(0) ? metallic : texture(metallic_map, VertexOut.uv * metallic_map_uv_scale).b;
+EvalMaterial evalMaterial() {
+  Material mat = materials[DrawID];
+  EvalMaterial result;
+  result.albedo = textureSize(mat.albedo_map, 0) == ivec2(0) ? vec4(pow(mat.albedo.rgb, vec3(2.2)), mat.albedo.a) : texture(mat.albedo_map, VertexOut.uv * mat.albedo_map_uv_scale);
+  float fMetallic = textureSize(mat.metallic_map, 0) == ivec2(0) ? mat.metallic : texture(mat.metallic_map, VertexOut.uv * mat.metallic_map_uv_scale).b;
   result.metallic = fMetallic > 0.1;
-  result.roughness = max(0.01, textureSize(roughness_map, 0) == ivec2(0) ? roughness : texture(roughness_map, VertexOut.uv * roughness_map_uv_scale).g);
-  result.emission = textureSize(emission_map, 0) == ivec2(0) ? emission : texture(emission_map, VertexOut.uv * emission_map_uv_scale).rgb;
+  result.roughness = max(0.01, textureSize(mat.roughness_map, 0) == ivec2(0) ? mat.roughness : texture(mat.roughness_map, VertexOut.uv * mat.roughness_map_uv_scale).g);
+  result.emission = textureSize(mat.emission_map, 0) == ivec2(0) ? mat.emission : texture(mat.emission_map, VertexOut.uv * mat.emission_map_uv_scale).rgb;
 
   return result;
 }
 
-vec3 schlickFresnel(Material mat, float LDotH) {
+vec3 schlickFresnel(EvalMaterial mat, float LDotH) {
   vec3 f0 = vec3(0.04); // dielectric
   if (mat.metallic) {
     f0 = mat.albedo.rgb;
@@ -150,13 +165,13 @@ vec3 schlickFresnel(Material mat, float LDotH) {
 
 const float eps = 0.0000001;
 
-float geomSmith(Material mat, float DotVal) {
+float geomSmith(EvalMaterial mat, float DotVal) {
   float k = (mat.roughness + 1.0) * (mat.roughness + 1.0) / 8.0;
   float denom = DotVal * (1 - k) + k;
   return 1.0 / max(denom, eps);
 }
 
-float ggxDistribution(Material mat, float NDotH) {
+float ggxDistribution(EvalMaterial mat, float NDotH) {
   float alpha2 = mat.roughness * mat.roughness * mat.roughness * mat.roughness;
   float d = (NDotH * NDotH) * (alpha2 - 1) + 1;
   return alpha2 / max((PI * d * d), eps);
@@ -191,7 +206,7 @@ float map(float value, float min1, float max1, float min2, float max2) {
   return min2 + (value - min1) * (max2 - min2) / (max1 - min1);
 }
 
-vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
+vec3 microfacetModel(EvalMaterial mat, int light_idx, Light light, vec3 P, vec3 N) {
   int csm_split_idx = getCSMSplit(light_idx, P.z);
   // Visualize CSM splits
   //mat.albedo = vec4(mix(mat.albedo.rgb, csm_split_colors[csm_split_idx], 0.8), mat.albedo.a);
@@ -290,9 +305,10 @@ vec3 microfacetModel(Material mat, int light_idx, Light light, vec3 P, vec3 N) {
 }
 
 void main() {
-  Material material = evalMaterial();
+  Material mat = materials[DrawID];
+  EvalMaterial material = evalMaterial();
   
-  vec3 N = textureSize(normal_map, 0) == ivec2(0) ? vec3(0.5) : vec3(texture(normal_map, VertexOut.uv * normal_map_uv_scale).xy, 0);
+  vec3 N = textureSize(mat.normal_map, 0) == ivec2(0) ? vec3(0.5) : vec3(texture(mat.normal_map, VertexOut.uv * mat.normal_map_uv_scale).xy, 0);
   N = N * 2.0 - 1.0;
   N.z = sqrt(clamp(1 - N.x * N.x - N.y * N.y, 0, 1));
   N = normalize(N);
