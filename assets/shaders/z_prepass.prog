@@ -1,0 +1,6 @@
+
+{
+  "shader": "z_prepass.glsl",
+  "vertex": true,
+  "fragment": true
+}

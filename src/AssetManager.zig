@@ -241,6 +241,20 @@ fn loadShaderProgramErr(self: *AssetManager, id: AssetId) !LoadedShaderProgram {
         return error.ProgramLinkFailed;
     }
 
+    var program_length: gl.GLsizei = 0;
+    gl.getProgramiv(prog, gl.PROGRAM_BINARY_LENGTH, &program_length);
+
+    if (program_length > 0) {
+        const program_binary = try self.frame_arena.allocSentinel(u8, @intCast(program_length - 1), 0);
+        var binary_format: gl.GLenum = gl.NONE;
+        var return_len: gl.GLsizei = 0;
+        gl.getProgramBinary(prog, program_length, &return_len, &binary_format, @ptrCast(program_binary.ptr));
+        checkGLError();
+        if (program_length == return_len) {
+            std.log.debug("Program {s} binary:\n{s}\n", .{ asset_manifest.getPath(id), program_binary[0..@intCast(return_len)] });
+        }
+    }
+
     const loaded_shader_program = LoadedShaderProgram{
         .program = prog,
     };

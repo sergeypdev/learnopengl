@@ -719,43 +719,8 @@ pub fn finish(self: *Render) void {
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    {
-        const camera_matrix: *CameraMatrices = @alignCast(@ptrCast(self.camera_matrices[self.tripple_buffer_index * self.uboAlignedSizeOf(CameraMatrices) ..].ptr));
-        camera_matrix.* = .{
-            .projection = camera_projection,
-            .view = self.camera.view_mat,
-        };
-
-        //gl.flushMappedNamedBufferRange(self.camera_ubo, idx * @sizeOf(CameraMatrices), @sizeOf(CameraMatrices));
-        gl.bindBufferRange(
-            gl.UNIFORM_BUFFER,
-            UBO.CameraMatrices.value(),
-            self.camera_ubo,
-            self.tripple_buffer_index * self.uboAlignedSizeOf(CameraMatrices),
-            @intCast(self.uboAlignedSizeOf(CameraMatrices)),
-        );
-        checkGLError();
-    }
-
-    gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
-    gl.bindVertexArray(self.mesh_vao);
-
     const switched_to_alpha_blend = false;
     gl.disable(gl.BLEND);
-
-    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
-    checkGLError();
-    self.assetman.vertex_heap.normals.bind(Render.Attrib.Normal.value());
-    checkGLError();
-    self.assetman.vertex_heap.tangents.bind(Render.Attrib.Tangent.value());
-    checkGLError();
-    self.assetman.vertex_heap.uvs.bind(Render.Attrib.UV.value());
-    checkGLError();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
-    checkGLError();
-
-    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMap2D.value(), self.shadow_texture_handle);
-    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMapCube.value(), self.cube_shadow_texture_handle);
 
     const draw_indirect_cmds_c: [*]u8 = @ptrCast(gl.mapNamedBuffer(
         self.draw_indirect_buffer,
@@ -813,9 +778,57 @@ pub fn finish(self: *Render) void {
 
     gl.bindBuffer(gl.DRAW_INDIRECT_BUFFER, self.draw_indirect_buffer);
 
+    {
+        const camera_matrix: *CameraMatrices = @alignCast(@ptrCast(self.camera_matrices[self.tripple_buffer_index * self.uboAlignedSizeOf(CameraMatrices) ..].ptr));
+        camera_matrix.* = .{
+            .projection = camera_projection,
+            .view = self.camera.view_mat,
+        };
+
+        //gl.flushMappedNamedBufferRange(self.camera_ubo, idx * @sizeOf(CameraMatrices), @sizeOf(CameraMatrices));
+        gl.bindBufferRange(
+            gl.UNIFORM_BUFFER,
+            UBO.CameraMatrices.value(),
+            self.camera_ubo,
+            self.tripple_buffer_index * self.uboAlignedSizeOf(CameraMatrices),
+            @intCast(self.uboAlignedSizeOf(CameraMatrices)),
+        );
+        checkGLError();
+    }
+
+    gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.z_prepass).program);
+    gl.bindVertexArray(self.shadow_vao);
+
+    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
+    checkGLError();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
+    checkGLError();
+
+    gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(rendered_count), @sizeOf(DrawIndirectCmd));
+
+    gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
+    gl.bindVertexArray(self.mesh_vao);
+    gl.depthFunc(gl.LEQUAL);
+
+    gl.uniform1ui(Uniform.LightsCount.value(), lights_buf.count.*);
+    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMap2D.value(), self.shadow_texture_handle);
+    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMapCube.value(), self.cube_shadow_texture_handle);
+
+    self.assetman.vertex_heap.normals.bind(Render.Attrib.Normal.value());
+    checkGLError();
+    self.assetman.vertex_heap.tangents.bind(Render.Attrib.Tangent.value());
+    checkGLError();
+    self.assetman.vertex_heap.uvs.bind(Render.Attrib.UV.value());
+    checkGLError();
+    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
+    checkGLError();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
+    checkGLError();
+
     gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(rendered_count), @sizeOf(DrawIndirectCmd));
 
     gl.disable(gl.BLEND);
+    gl.depthFunc(gl.LESS);
 
     // Debug stuff
     {
@@ -1159,6 +1172,7 @@ pub const Uniform = enum(gl.GLint) {
     // Bloom
     SRCMipLevel = 19,
     BloomStrength = 20,
+    LightsCount = 21,
 
     pub inline fn value(self: Uniform) gl.GLint {
         return @intFromEnum(self);
@@ -1192,7 +1206,7 @@ pub const Light = extern struct {
     view_mat: Mat4 = Mat4.identity(),
 
     // for directional lights contains view projection matrices for each split
-    // TODO: compress this somehow
+    // TODO: comprejk   ss this somehow
     view_proj_mats: [4]Mat4 = undefined,
 
     // Usese floats because it's a vec4 on the other end
@@ -1216,7 +1230,7 @@ pub const Light = extern struct {
     }
 };
 
-const LightSSBO = BufferSSBO(Light);
+const LightSSBO = BufferSSBOAlign(Light, 16);
 
 // Shader struct for material data
 pub const MaterialPBR = extern struct {

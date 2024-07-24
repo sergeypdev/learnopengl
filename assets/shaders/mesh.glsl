@@ -1,7 +1,77 @@
 #extension GL_ARB_bindless_texture : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#extension GL_KHR_shader_subgroup_vote : enable
+
 // Keep in sync with cpu
 #define MAX_POINT_LIGHTS 8
 #define PI 3.1415926535897932384626433832795
+#define CSM_SPLITS 4
+
+struct DrawCmdData {
+  mat4 transform;
+};
+
+// UBOs
+layout(std140, binding = 0) uniform Matrices {
+  mat4 projection;
+  mat4 view;
+};
+
+layout(std430, binding = 3) readonly buffer DrawCmdDatas {
+  uint draws_count;
+  // Access by gl_DrawID
+  DrawCmdData draw_data[];
+};
+
+layout(location = 16, bindless_sampler) uniform sampler2DArrayShadow shadow_maps;
+layout(location = 17, bindless_sampler) uniform samplerCubeArrayShadow cube_shadow_maps;
+layout(location = 21) uniform uint lights_count;
+
+
+// Input, output blocks
+
+VERTEX_EXPORT VertexData {
+  vec3 vPos;
+  vec2 uv;
+  mat3 vTBN;
+  vec3 wPos;
+  vec3 wNormal;
+} VertexOut;
+
+VERTEX_EXPORT flat int DrawID;
+
+float random(vec4 seed4) {
+  float dot_product = dot(seed4, vec4(12.9898,78.233,45.164,94.673));
+  return fract(sin(dot_product) * 43758.5453);
+}
+
+#if VERTEX_SHADER
+
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUV;
+layout(location = 3) in vec3 aTangent;
+
+void main() {
+    DrawID = gl_DrawID;
+    mat4 model = draw_data[gl_DrawID].transform;
+    mat4 viewModel = view * model;
+    vec4 vPos = viewModel * vec4(aPos.xyz, 1.0);
+    gl_Position = projection * vPos;
+
+    VertexOut.vPos = vPos.xyz / vPos.w;
+    VertexOut.uv = aUV;
+    vec3 aBitangent = cross(aTangent, aNormal);
+    vec3 T = normalize(vec3(viewModel * vec4(aTangent, 0.0)));
+    vec3 B = normalize(vec3(viewModel * vec4(aBitangent, 0.0)));
+    vec3 N = normalize(vec3(viewModel * vec4(aNormal, 0.0)));
+    VertexOut.vTBN = mat3(T, B, N);
+    VertexOut.wPos = (model * vec4(aPos.xyz, 1.0)).xyz;
+    VertexOut.wNormal = normalize(model * vec4(aNormal, 0.0)).xyz;
+}
+#endif // VERTEX_SHADER
+
+#if FRAGMENT_SHADER
 
 // Types
 struct Light {
@@ -38,18 +108,9 @@ struct Material {
   vec2 emission_map_uv_scale;
 };
 
-struct DrawCmdData {
-  mat4 transform;
-};
-
-// UBOs
-layout(std140, binding = 0) uniform Matrices {
-  mat4 projection;
-  mat4 view;
-};
 
 layout(std430, binding = 1) readonly buffer Lights {
-  uint lights_count;
+  uint _lights_count;
   Light lights[];
 };
 
@@ -58,10 +119,13 @@ layout(std430, binding = 2) readonly buffer Materials {
   Material materials[];
 };
 
-layout(std430, binding = 3) readonly buffer DrawCmdDatas {
-  uint draws_count;
-  // Access by gl_DrawID
-  DrawCmdData draw_data[];
+out vec4 FragColor;
+
+struct EvalMaterial {
+  vec4 albedo;
+  bool metallic;
+  float roughness;
+  vec3 emission;
 };
 
 int getShadowMapIndex(int lightIdx) {
@@ -73,74 +137,16 @@ int getCSMSplitCount(int lightIdx) {
 }
 
 int getCSMSplit(int lightIdx, float depth) {
-  int totalSplits = getCSMSplitCount(lightIdx);
+  // int totalSplits = getCSMSplitCount(lightIdx);
 
-  for (int i = 0; i < totalSplits; i++) {
+  for (int i = 0; i < CSM_SPLITS; i++) {
     if (depth > lights[lightIdx].csm_split_points[i]) {
       return i;
     }
   }
 
-  return totalSplits - 1;
+  return CSM_SPLITS - 1;
 }
-
-layout(location = 16, bindless_sampler) uniform sampler2DArrayShadow shadow_maps;
-layout(location = 17, bindless_sampler) uniform samplerCubeArrayShadow cube_shadow_maps;
-
-
-// Input, output blocks
-
-VERTEX_EXPORT VertexData {
-  vec3 vPos;
-  vec2 uv;
-  mat3 vTBN;
-  vec3 wPos;
-  vec3 wNormal;
-} VertexOut;
-
-VERTEX_EXPORT flat int DrawID;
-
-float random(vec4 seed4) {
-  float dot_product = dot(seed4, vec4(12.9898,78.233,45.164,94.673));
-  return fract(sin(dot_product) * 43758.5453);
-}
-
-#if VERTEX_SHADER
-
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec2 aUV;
-layout(location = 3) in vec3 aTangent;
-
-void main() {
-    DrawID = gl_DrawID;
-    mat4 model = draw_data[DrawID].transform;
-    vec4 vPos = view * model * vec4(aPos.xyz, 1.0);
-    gl_Position = projection * vPos;
-
-    VertexOut.vPos = vPos.xyz / vPos.w; // I don't think this is needed, but leaving just in case
-    VertexOut.uv = aUV;
-    vec3 aBitangent = cross(aTangent, aNormal);
-    vec3 T = normalize(vec3(view * model * vec4(aTangent, 0.0)));
-    vec3 B = normalize(vec3(view * model * vec4(aBitangent, 0.0)));
-    vec3 N = normalize(vec3(view * model * vec4(aNormal, 0.0)));
-    VertexOut.vTBN = mat3(T, B, N);
-    vec4 wPos = model * vec4(aPos.xyz, 1.0);
-    VertexOut.wPos = wPos.xyz / wPos.w;
-    VertexOut.wNormal = normalize(model * vec4(aNormal, 0.0)).xyz;
-}
-#endif // VERTEX_SHADER
-
-#if FRAGMENT_SHADER
-
-out vec4 FragColor;
-
-struct EvalMaterial {
-  vec4 albedo;
-  bool metallic;
-  float roughness;
-  vec3 emission;
-};
 
 EvalMaterial evalMaterial() {
   Material mat = materials[DrawID];
@@ -177,8 +183,8 @@ float ggxDistribution(EvalMaterial mat, float NDotH) {
   return alpha2 / max((PI * d * d), eps);
 }
 
-float lightAttenuation(float point, float dist, float radius) {
-  float d = max(dist - radius, 0) * point;
+float lightAttenuation(bool point, float dist, float radius) {
+  float d = max(dist - radius, 0) * (point ? 1.0 : 0.0);
 
   float denom = d/radius + 1;
   float att = 1 / (denom * denom);
@@ -206,10 +212,8 @@ float map(float value, float min1, float max1, float min2, float max2) {
   return min2 + (value - min1) * (max2 - min2) / (max1 - min1);
 }
 
-vec3 microfacetModel(EvalMaterial mat, int light_idx, Light light, vec3 P, vec3 N) {
-  int csm_split_idx = getCSMSplit(light_idx, P.z);
-  // Visualize CSM splits
-  //mat.albedo = vec4(mix(mat.albedo.rgb, csm_split_colors[csm_split_idx], 0.8), mat.albedo.a);
+vec3 microfacetModel(EvalMaterial mat, int light_idx, vec3 P, vec3 N) {
+  // Light light = lights[light_idx];
 
   vec3 diffuseBrdf = vec3(0); // metallic
   if (!mat.metallic) {
@@ -217,10 +221,10 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, Light light, vec3 P, vec3 
   }
 
   // 0 - means directional, 1 - means point light
-  float point = light.vPos.w;
-  vec3 lightI = light.color.rgb;
-  float lightRadius = max(light.color.a, eps);
-  vec3 L = mix(-light.vPos.xyz, light.vPos.xyz - P, light.vPos.w);
+  bool point = subgroupAll(lights[light_idx].vPos.w == 1);
+  vec3 lightI = lights[light_idx].color.rgb;
+  float lightRadius = max(lights[light_idx].color.a, eps);
+  vec3 L = mix(-lights[light_idx].vPos.xyz, lights[light_idx].vPos.xyz - P, lights[light_idx].vPos.w);
   float dist = max(length(L), eps);
   L /= dist;
 
@@ -245,40 +249,42 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, Light light, vec3 P, vec3 
   float normal_offset_scale = clamp(1 - NDotL, 0, 1);
   normal_offset_scale *= 10; // constant
 
-  int shadow_map_idx = getShadowMapIndex(light_idx);
-  shadow_map_idx = 0;
+  int shadow_map_idx = subgroupBroadcastFirst(getShadowMapIndex(light_idx));
 
   float constant_bias = 0.003;
   float shadow_mult = 1;
   vec4 shadow_offset = vec4(VertexOut.wNormal * normal_offset_scale, 0);
-  if (point == 1) {
+  if (point) {
     vec2 shadow_map_texel_size = 1.0 / vec2(textureSize(cube_shadow_maps, 0));
     shadow_offset *= shadow_map_texel_size.x;
-    vec3 shadow_dir = (light.view_mat * vec4(VertexOut.wPos, 1.0)).xyz;
+    vec3 shadow_dir = (lights[light_idx].view_mat * vec4(VertexOut.wPos, 1.0)).xyz;
     float world_depth = length(shadow_dir.xyz);
-    shadow_dir = normalize((light.view_mat * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xyz);
-    float mapped_depth = map(world_depth, light.params.x, light.params.y, 0, 1);
+    shadow_dir = normalize((lights[light_idx].view_mat * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xyz);
+    float mapped_depth = map(world_depth, lights[light_idx].params.x, lights[light_idx].params.y, 0, 1);
 
     vec4 texcoord;
     texcoord.xyz = shadow_dir;
     texcoord.w = float(light_idx);
 
     float sum = 0;
-    for (float z = -1; z <= 1; z += 1) {
-      for (float y = -1; y <= 1; y += 1) {
-        for (float x = -1; x <= 1; x += 1) {
-          sum += texture(cube_shadow_maps, vec4(normalize(texcoord.xyz + vec3(x, y, z) * shadow_map_texel_size.x), texcoord.w), mapped_depth - constant_bias);
-        }
-      }
-    }
 
-    shadow_mult = sum / 27;
+    sum += texture(cube_shadow_maps, vec4(normalize(texcoord.xyz), texcoord.w), mapped_depth - constant_bias);
+    // for (float y = -1.5; y <= 1.5; y += 1) {
+    //   for (float x = -1.5; x <= 1.5; x += 1) {
+    //     // sum += texture(cube_shadow_maps, vec4(normalize(texcoord.xyz + vec3(x, y, z) * shadow_map_texel_size.x), texcoord.w), mapped_depth - constant_bias);
+    //   }
+    // }
+
+    shadow_mult = sum / 1.0;
   } else {
+    int csm_split_idx = subgroupBroadcastFirst(getCSMSplit(light_idx, P.z));
+    // Visualize CSM splits
+    //mat.albedo = vec4(mix(mat.albedo.rgb, csm_split_colors[csm_split_idx], 0.8), mat.albedo.a);
     // Directional shadow
     vec2 shadow_map_texel_size = 1.0 / vec2(textureSize(shadow_maps, 0));
     shadow_offset *= shadow_map_texel_size.x;
-    vec4 shadow_pos = light.view_proj_mats[csm_split_idx] * vec4(VertexOut.wPos, 1.0);
-    shadow_pos.xy = (light.view_proj_mats[csm_split_idx] * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xy;
+    vec4 shadow_pos = lights[light_idx].view_proj_mats[csm_split_idx] * vec4(VertexOut.wPos, 1.0);
+    // shadow_pos.xy = (lights[light_idx].view_proj_mats[csm_split_idx] * (vec4(VertexOut.wPos, 1.0) + shadow_offset)).xy;
     shadow_pos /= shadow_pos.w;
     shadow_pos.xy = shadow_pos.xy * 0.5 + 0.5; // [-1, 1] to [0, 1]
     shadow_pos.z = min(shadow_pos.z, 1);
@@ -289,19 +295,20 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, Light light, vec3 P, vec3 
     texcoord.z = shadow_map_idx + csm_split_idx;
 
     float sum = 0;
-    for (float y = -1.5; y <= 1.5; y += 1) {
-      for (float x = -1.5; x <= 1.5; x += 1) {
-        sum += texture(shadow_maps, vec4(texcoord.xy + vec2(x, y) * shadow_map_texel_size, texcoord.zw));
-      }
-    }
+    sum = texture(shadow_maps, vec4(texcoord.xy, texcoord.zw));
+    // for (float y = -0.5; y <= 0.5; y += 1) {
+    //   for (float x = -0.5; x <= 0.5; x += 1) {
+    //     sum += ;
+    //   }
+    // }
 
-    shadow_mult = sum / 16.0;
+    shadow_mult = sum / 1.0;
   }
   shadow_mult = clamp(shadow_mult, 0, 1);
 
-  vec3 specBrdf = 0.25 * ggxDistribution(mat, NDotH) * schlickFresnel(mat, LDotH) * geomSmith(mat, NDotL) * geomSmith(mat, NDotV);
+  vec3 specBrdf = geomSmith(mat, NDotL) * geomSmith(mat, NDotV) * 0.25 * ggxDistribution(mat, NDotH) * schlickFresnel(mat, LDotH);
 
-  return (diffuseBrdf + PI * specBrdf) * lightI * NDotL * shadow_mult + mat.emission;
+  return (PI * specBrdf + diffuseBrdf) * NDotL * shadow_mult * lightI + mat.emission;
 }
 
 void main() {
@@ -316,8 +323,10 @@ void main() {
 
   vec3 finalColor = vec3(0);
 
-  for (int i = 0; i < clamp(lights_count, uint(0), uint(MAX_POINT_LIGHTS)); i++) {
-    finalColor += microfacetModel(material, i, lights[i], VertexOut.vPos, N);
+  // int n_lights = clamp(int(lights_count), 0, MAX_POINT_LIGHTS);
+  for (int i = 0; i < lights_count; i++) {
+    // if (i >= lights_count) break;
+    finalColor += microfacetModel(material, i, VertexOut.vPos, N);
   }
 
   FragColor = vec4(finalColor, material.albedo.a);
