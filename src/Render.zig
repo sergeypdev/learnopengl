@@ -6,6 +6,7 @@ const a = @import("asset_manifest");
 const globals = @import("globals.zig");
 pub const Material = @import("formats.zig").Material;
 const math = @import("math.zig");
+const formats = @import("formats.zig");
 
 const za = @import("zalgebra");
 const Vec2 = za.Vec2;
@@ -17,7 +18,7 @@ const Vec2_i32 = za.Vec2_i32;
 
 pub const MAX_FRAMES_QUEUED = 3;
 pub const MAX_LIGHTS = 8;
-pub const MAX_DRAW_COMMANDS = 4096;
+pub const MAX_DRAW_COMMANDS = 1024 * 16;
 pub const MAX_LIGHT_COMMANDS = 2048;
 pub const MAX_MATERIALS = MAX_DRAW_COMMANDS;
 pub const CSM_SPLITS = 4;
@@ -722,20 +723,25 @@ pub fn finish(self: *Render) void {
     const switched_to_alpha_blend = false;
     gl.disable(gl.BLEND);
 
-    const draw_indirect_cmds_c: [*]u8 = @ptrCast(gl.mapNamedBuffer(
-        self.draw_indirect_buffer,
-        gl.WRITE_ONLY,
-    ) orelse {
-        checkGLError();
-        @panic("map draw indirect buffer");
-    });
-    var draw_indirect_cmds = std.mem.bytesAsSlice(DrawIndirectCmd, draw_indirect_cmds_c[0 .. @sizeOf(DrawIndirectCmd) * MAX_DRAW_COMMANDS]);
+    var draw_indirect_cmds = self.frame_arena.alloc(DrawIndirectCmd, MAX_DRAW_COMMANDS) catch @panic("OOM");
+    var draw_cmd_data = self.frame_arena.alloc(DrawCommandData, MAX_DRAW_COMMANDS) catch @panic("OOM");
+
+    var draw_indirect_buf: gl.GLuint = 0;
+    gl.createBuffers(1, &draw_indirect_buf);
+    checkGLError();
+    defer gl.deleteBuffers(1, &draw_indirect_buf);
+
+    var draw_cmd_data_buf: gl.GLuint = 0;
+    gl.createBuffers(1, &draw_cmd_data_buf);
+    checkGLError();
+    defer gl.deleteBuffers(1, &draw_cmd_data_buf);
 
     const materials = self.materials_pbr_ssbo.getInstance(self.tripple_buffer_index);
     materials.count.* = 0;
 
-    const draw_cmd_data = self.draw_cmd_data_ssbo.getInstance(self.tripple_buffer_index);
+    var material_map = std.StringHashMap(i32).init(self.frame_arena);
 
+    var materials_count: usize = 0;
     var rendered_count: usize = 0;
     cmds: for (self.command_buffer[0..self.command_count]) |*cmd| {
         const mesh = self.assetman.resolveMesh(cmd.mesh);
@@ -755,12 +761,20 @@ pub fn finish(self: *Render) void {
             // gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         }
 
-        draw_cmd_data.data[rendered_count] = DrawCommandData{
-            .transform = cmd.transform,
-        };
+        const material_bytes = std.mem.asBytes(&material);
+        const material_copy = self.frame_arena.alloc(u8, material_bytes.len) catch @panic("OOM");
+        @memcpy(material_copy, material_bytes);
+        const gop = material_map.getOrPut(material_copy) catch @panic("OOM");
+        if (!gop.found_existing) {
+            gop.value_ptr.* = @intCast(materials_count);
+            materials.data[materials_count] = MaterialPBR.fromMaterial(self.assetman, &material);
+            materials_count += 1;
+        }
 
-        materials.data[rendered_count] = MaterialPBR.fromMaterial(self.assetman, &material);
-        materials.count.* += 1;
+        draw_cmd_data[rendered_count] = DrawCommandData{
+            .transform = cmd.transform,
+            .material_index = gop.value_ptr.*,
+        };
 
         draw_indirect_cmds[rendered_count] = DrawIndirectCmd{
             .count = mesh.indices.count,
@@ -773,10 +787,6 @@ pub fn finish(self: *Render) void {
 
         rendered_count += 1;
     }
-
-    _ = gl.unmapNamedBuffer(self.draw_indirect_buffer);
-
-    gl.bindBuffer(gl.DRAW_INDIRECT_BUFFER, self.draw_indirect_buffer);
 
     {
         const camera_matrix: *CameraMatrices = @alignCast(@ptrCast(self.camera_matrices[self.tripple_buffer_index * self.uboAlignedSizeOf(CameraMatrices) ..].ptr));
@@ -796,15 +806,21 @@ pub fn finish(self: *Render) void {
         checkGLError();
     }
 
+    gl.namedBufferStorage(draw_indirect_buf, @intCast(@sizeOf(DrawIndirectCmd) * rendered_count), draw_indirect_cmds.ptr, 0);
+    gl.bindBuffer(gl.DRAW_INDIRECT_BUFFER, draw_indirect_buf);
+
+    gl.namedBufferStorage(draw_cmd_data_buf, @intCast(@sizeOf(DrawCommandData) * rendered_count), draw_cmd_data.ptr, 0);
+    gl.bindBufferBase(gl.SHADER_STORAGE_BUFFER, SSBO.DrawCommandData.value(), draw_cmd_data_buf);
+
     gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.z_prepass).program);
     gl.bindVertexArray(self.shadow_vao);
 
-    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
+    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value(), 0);
     checkGLError();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
     checkGLError();
 
-    gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(rendered_count), @sizeOf(DrawIndirectCmd));
+    // gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(rendered_count), @sizeOf(DrawIndirectCmd));
 
     gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
     gl.bindVertexArray(self.mesh_vao);
@@ -1314,13 +1330,13 @@ pub fn BufferSSBOAlign(comptime T: type, comptime alignment: usize) type {
             _start: [0]T align(alignment),
 
             pub fn calculateBufSize(max_count: usize, ssbo_align: usize) usize {
-                return std.mem.alignForward(usize, @sizeOf(BufferInstance) + @sizeOf(T) * max_count, ssbo_align);
+                return std.mem.alignForward(usize, @sizeOf(BufferLayout) + std.mem.alignForward(usize, @sizeOf(T), alignment) * max_count, ssbo_align);
             }
 
-            pub fn getData(self: *BufferLayout, len: usize) []T {
-                var data_c: [*]T = @ptrFromInt(@intFromPtr(self) + @offsetOf(BufferLayout, "_start"));
+            pub fn getData(self: *BufferLayout, len: usize) ([]align(alignment) T) {
+                var data_c: [*]align(alignment) T = @ptrFromInt(@intFromPtr(self) + @offsetOf(BufferLayout, "_start"));
 
-                return data_c[0..len];
+                return @alignCast(data_c[0..len]);
             }
         };
 
@@ -1408,9 +1424,11 @@ const MaterialPBRSSBO = BufferSSBO(MaterialPBR);
 
 const DrawCommandData = extern struct {
     transform: Mat4,
+    material_index: c_int,
+    _pad: [0]void align(16) = std.mem.zeroes([0]void),
 };
 
-const DrawCommandDataSSBO = BufferSSBOAlign(DrawCommandData, 16);
+const DrawCommandDataSSBO = BufferSSBO(DrawCommandData);
 
 const DrawIndirectCmd = extern struct {
     count: gl.GLuint,

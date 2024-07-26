@@ -1,6 +1,7 @@
 
 struct DrawCmdData {
   mat4 transform;
+  int materialIdx;
 };
 
 // UBOs
@@ -10,7 +11,6 @@ layout(std140, binding = 0) uniform Matrices {
 };
 
 layout(std430, binding = 3) readonly buffer DrawCmdDatas {
-  uint draws_count;
   // Access by gl_DrawID
   DrawCmdData draw_data[];
 };

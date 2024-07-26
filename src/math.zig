@@ -86,14 +86,14 @@ pub const AABB = struct {
 
     // TODO: optimize
     pub fn transform(self: *const AABB, matrix: Mat4) AABB {
-        var min = Vec3.zero();
-        var max = Vec3.zero();
+        var min = Vec3.new(std.math.floatMax(f32), std.math.floatMax(f32), std.math.floatMax(f32));
+        var max = Vec3.new(std.math.floatMin(f32), std.math.floatMin(f32), std.math.floatMin(f32));
 
         inline for (box_corners) |corner| {
             const corner_pos = matrix.mulByVec4(self.origin.add(self.extents.mul(corner)).toVec4(1));
-            const corner_pos3 = corner_pos.scale(1 / corner_pos.w()).toVec3();
-            min = Vec3.new(@min(corner_pos3.x(), min.x()), @min(corner_pos3.y(), min.y()), @min(corner_pos3.z(), min.z()));
-            max = Vec3.new(@max(corner_pos3.x(), max.x()), @max(corner_pos3.y(), max.y()), @max(corner_pos3.z(), max.z()));
+            const corner_pos3 = corner_pos.toVec3();
+            min = corner_pos3.min(min);
+            max = corner_pos3.max(max);
         }
 
         return AABB.fromMinMax(min, max);
@@ -118,12 +118,22 @@ pub const BoundingSphere = struct {
 
 pub const Frustum = struct {
     // Plane normals
-    top: Plane = .{},
-    right: Plane = .{},
-    bottom: Plane = .{},
-    left: Plane = .{},
-    near: Plane = .{},
-    far: Plane = .{},
+    // top
+    // right
+    // bottom
+    // left
+    // near
+    // far
+    planes: [6]Plane = std.mem.zeroes([6]Plane),
+
+    pub const PlaneSide = enum {
+        Top,
+        Right,
+        Bottom,
+        Left,
+        Near,
+        Far,
+    };
 
     /// Extracts frustum planes from matrices using Gribb-Hartmann method
     /// If you pass in a projection matrix planes will be in view space.
@@ -143,31 +153,36 @@ pub const Frustum = struct {
         const far = row4.sub(row3);
 
         return .{
-            .top = Plane.new(top),
-            .right = Plane.new(right),
-            .bottom = Plane.new(bottom),
-            .left = Plane.new(left),
-            .near = Plane.new(near),
-            .far = Plane.new(far),
+            .planes = .{
+                Plane.new(top),
+                Plane.new(right),
+                Plane.new(bottom),
+                Plane.new(left),
+                Plane.new(near),
+                Plane.new(far),
+            },
         };
     }
 
+    pub fn getPlane(self: *const Frustum, side: PlaneSide) *const Plane {
+        return &self.planes[@intFromEnum(side)];
+    }
+
     pub fn getNearDist(self: *const Frustum) f32 {
-        return self.near.distance();
+        return self.getPlane(.Near).distance();
     }
 
     pub fn rangeZ(self: *const Frustum) f32 {
-        return self.far.point().sub(self.near.point()).dot(self.near.normal());
+        return self.getPLane(.Far).point().sub(self.getPlane(.Near).point()).dot(self.getPlane(.Near).normal());
     }
 
     pub fn transform(self: *const Frustum, matrix: *const Mat4) Frustum {
+        const new_planes = self.planes;
+        for (new_planes) |*plane| {
+            plane.* = plane.transform(matrix);
+        }
         return Frustum{
-            .top = self.top.transform(matrix),
-            .right = self.right.transform(matrix),
-            .bottom = self.bottom.transform(matrix),
-            .left = self.left.transform(matrix),
-            .near = self.near.transform(matrix),
-            .far = self.far.transform(matrix),
+            .planes = new_planes,
         };
     }
 
@@ -176,26 +191,44 @@ pub const Frustum = struct {
     }
 
     fn intersectAABBInternal(self: *const Frustum, aabb: AABB, comptime skip_near: bool) bool {
-        var outside_top_plane = true;
-        var outside_bottom_plane = true;
-        var outside_left_plane = true;
-        var outside_right_plane = true;
-        var outside_near_plane = !skip_near;
-        var outside_far_plane = true;
-        inline for (box_corners) |corner| {
-            const p = aabb.origin.add(aabb.extents.mul(corner));
+        for (0..6) |i| {
+            if (skip_near and i == @intFromEnum(PlaneSide.Near)) continue;
 
-            outside_top_plane = outside_top_plane and self.top.isUnder(p);
-            outside_bottom_plane = outside_bottom_plane and self.bottom.isUnder(p);
-            outside_left_plane = outside_left_plane and self.left.isUnder(p);
-            outside_right_plane = outside_right_plane and self.right.isUnder(p);
-            if (!skip_near) {
-                outside_near_plane = outside_near_plane and self.near.isUnder(p);
+            const plane = self.planes[i];
+            const nx = plane.normal().x() > 0;
+            const ny = plane.normal().y() > 0;
+            const nz = plane.normal().z() > 0;
+
+            const min = aabb.origin.sub(aabb.extents);
+            const max = aabb.origin.add(aabb.extents);
+
+            // TODO: vectorize
+            const dot = (plane.normal().x() * if (nx) max.x() else min.x()) + (plane.normal().y() * if (ny) max.y() else min.y()) + (plane.normal().z() * if (nz) max.z() else min.z());
+
+            if (dot < plane.distance()) {
+                return false;
             }
-            outside_far_plane = outside_far_plane and self.far.isUnder(p);
+
+            // const dot2 = (plane.normal().x() * if (nx) min.x else max.x) + (plane.normal().y() * if (ny) min.y else max.y) + (plane.normal().z() * if (nz) min.z else max.z);
+            // planes have unit-length normal, offset = -dot(normal, point on plane)
+            // 	const Plane3& plane = planes[i];
+            // 	Index nx = plane.normal.x > Real(0);
+            // 	Index ny = plane.normal.y > Real(0);
+            // 	Index nz = plane.normal.z > Real(0);
+            //
+            // 	// getMinMax(): 0 = return min coordinate. 1 = return max.
+            // 	Real dot = (plane.normal.x*box.getMinMax(nx).x) + (plane.normal.y*box.getMinMax(ny).y) + (plane.normal.z*box.getMinMax(nz).z);
+            //
+            // 	if ( dot < -plane.offset )
+            // 		return OUTSIDE;
+            //
+            // 	Real dot2 = (plane.normal.x*box.getMinMax(1-nx).x) + (plane.normal.y*box.getMinMax(1-ny).y) + (plane.normal.z*box.getMinMax(1-nz).z);
+            //
+            // 	if ( dot2 <= -plane.offset )
+            // 		result = INTERSECTS;
         }
 
-        return !(outside_left_plane or outside_right_plane or outside_bottom_plane or outside_top_plane or outside_near_plane or outside_far_plane);
+        return true;
     }
 
     pub fn intersectAABB(self: *const Frustum, aabb: AABB) bool {

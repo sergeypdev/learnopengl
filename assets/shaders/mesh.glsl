@@ -9,6 +9,7 @@
 
 struct DrawCmdData {
   mat4 transform;
+  int materialIdx;
 };
 
 // UBOs
@@ -18,7 +19,6 @@ layout(std140, binding = 0) uniform Matrices {
 };
 
 layout(std430, binding = 3) readonly buffer DrawCmdDatas {
-  uint draws_count;
   // Access by gl_DrawID
   DrawCmdData draw_data[];
 };
@@ -149,13 +149,13 @@ int getCSMSplit(int lightIdx, float depth) {
 }
 
 EvalMaterial evalMaterial() {
-  Material mat = materials[DrawID];
   EvalMaterial result;
-  result.albedo = textureSize(mat.albedo_map, 0) == ivec2(0) ? vec4(pow(mat.albedo.rgb, vec3(2.2)), mat.albedo.a) : texture(mat.albedo_map, VertexOut.uv * mat.albedo_map_uv_scale);
-  float fMetallic = textureSize(mat.metallic_map, 0) == ivec2(0) ? mat.metallic : texture(mat.metallic_map, VertexOut.uv * mat.metallic_map_uv_scale).b;
+  int materialIdx = draw_data[DrawID].materialIdx;
+  result.albedo = textureSize(materials[materialIdx].albedo_map, 0) == ivec2(0) ? vec4(pow(materials[materialIdx].albedo.rgb, vec3(2.2)), materials[materialIdx].albedo.a) : texture(materials[materialIdx].albedo_map, VertexOut.uv * materials[materialIdx].albedo_map_uv_scale);
+  float fMetallic = textureSize(materials[materialIdx].metallic_map, 0) == ivec2(0) ? materials[materialIdx].metallic : texture(materials[materialIdx].metallic_map, VertexOut.uv * materials[materialIdx].metallic_map_uv_scale).b;
   result.metallic = fMetallic > 0.1;
-  result.roughness = max(0.01, textureSize(mat.roughness_map, 0) == ivec2(0) ? mat.roughness : texture(mat.roughness_map, VertexOut.uv * mat.roughness_map_uv_scale).g);
-  result.emission = textureSize(mat.emission_map, 0) == ivec2(0) ? mat.emission : texture(mat.emission_map, VertexOut.uv * mat.emission_map_uv_scale).rgb;
+  result.roughness = max(0.01, textureSize(materials[materialIdx].roughness_map, 0) == ivec2(0) ? materials[materialIdx].roughness : texture(materials[materialIdx].roughness_map, VertexOut.uv * materials[materialIdx].roughness_map_uv_scale).g);
+  result.emission = textureSize(materials[materialIdx].emission_map, 0) == ivec2(0) ? materials[materialIdx].emission : texture(materials[materialIdx].emission_map, VertexOut.uv * materials[materialIdx].emission_map_uv_scale).rgb;
 
   return result;
 }
@@ -223,21 +223,7 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, vec3 P, vec3 N) {
   // 0 - means directional, 1 - means point light
   bool point = subgroupAll(lights[light_idx].vPos.w == 1);
   vec3 lightI = lights[light_idx].color.rgb;
-  float lightRadius = max(lights[light_idx].color.a, eps);
   vec3 L = mix(-lights[light_idx].vPos.xyz, lights[light_idx].vPos.xyz - P, lights[light_idx].vPos.w);
-  float dist = max(length(L), eps);
-  L /= dist;
-
-  // TODO: I think this is uniform control flow
-  // so makes sense to use `if` there for directional/point
-  // and don't calculate attenuation for directional at all
-  float att = lightAttenuation(
-    point,
-    dist,
-    lightRadius
-  );
-  lightI *= att;
-
   vec3 V = normalize(-P);
   vec3 H = normalize(V + L);
 
@@ -255,6 +241,16 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, vec3 P, vec3 N) {
   float shadow_mult = 1;
   vec4 shadow_offset = vec4(VertexOut.wNormal * normal_offset_scale, 0);
   if (point) {
+    float dist = max(length(L), eps);
+    L /= dist;
+    float lightRadius = max(lights[light_idx].color.a, eps);
+    float att = lightAttenuation(
+      point,
+      dist,
+      lightRadius
+    );
+    lightI *= att;
+
     vec2 shadow_map_texel_size = 1.0 / vec2(textureSize(cube_shadow_maps, 0));
     shadow_offset *= shadow_map_texel_size.x;
     vec3 shadow_dir = (lights[light_idx].view_mat * vec4(VertexOut.wPos, 1.0)).xyz;
@@ -295,7 +291,7 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, vec3 P, vec3 N) {
     texcoord.z = shadow_map_idx + csm_split_idx;
 
     float sum = 0;
-    sum = texture(shadow_maps, vec4(texcoord.xy, texcoord.zw));
+    sum = 1.0; // texture(shadow_maps, vec4(texcoord.xy, texcoord.zw));
     // for (float y = -0.5; y <= 0.5; y += 1) {
     //   for (float x = -0.5; x <= 0.5; x += 1) {
     //     sum += ;
@@ -308,14 +304,19 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, vec3 P, vec3 N) {
 
   vec3 specBrdf = geomSmith(mat, NDotL) * geomSmith(mat, NDotV) * 0.25 * ggxDistribution(mat, NDotH) * schlickFresnel(mat, LDotH);
 
-  return (PI * specBrdf + diffuseBrdf) * NDotL * shadow_mult * lightI + mat.emission;
+  vec3 vecTerm = PI * specBrdf + diffuseBrdf;
+  float scalarTerm = NDotL * shadow_mult;
+
+  return scalarTerm * lightI + mat.emission;
 }
 
 void main() {
-  Material mat = materials[DrawID];
+  int materialIdx = draw_data[DrawID].materialIdx;
+  sampler2D normal_map = materials[materialIdx].normal_map;
+  vec2 normal_map_uv_scale = materials[materialIdx].normal_map_uv_scale;
   EvalMaterial material = evalMaterial();
   
-  vec3 N = textureSize(mat.normal_map, 0) == ivec2(0) ? vec3(0.5) : vec3(texture(mat.normal_map, VertexOut.uv * mat.normal_map_uv_scale).xy, 0);
+  vec3 N = textureSize(normal_map, 0) == ivec2(0) ? vec3(0.5) : vec3(texture(normal_map, VertexOut.uv * normal_map_uv_scale).xy, 0);
   N = N * 2.0 - 1.0;
   N.z = sqrt(clamp(1 - N.x * N.x - N.y * N.y, 0, 1));
   N = normalize(N);
@@ -324,8 +325,8 @@ void main() {
   vec3 finalColor = vec3(0);
 
   // int n_lights = clamp(int(lights_count), 0, MAX_POINT_LIGHTS);
-  for (int i = 0; i < lights_count; i++) {
-    // if (i >= lights_count) break;
+  for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
+    if (i >= lights_count) break;
     finalColor += microfacetModel(material, i, VertexOut.vPos, N);
   }
 
