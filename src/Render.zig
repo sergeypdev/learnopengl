@@ -814,13 +814,13 @@ pub fn finish(self: *Render) void {
     gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMap2D.value(), self.shadow_texture_handle);
     gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMapCube.value(), self.cube_shadow_texture_handle);
 
-    self.assetman.vertex_heap.normals.bind(Render.Attrib.Normal.value());
+    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value(), 0);
     checkGLError();
-    self.assetman.vertex_heap.tangents.bind(Render.Attrib.Tangent.value());
+    self.assetman.vertex_heap.ps_data.bind(Render.Attrib.Normal.value(), @offsetOf(formats.VertexPSData, "normal"));
     checkGLError();
-    self.assetman.vertex_heap.uvs.bind(Render.Attrib.UV.value());
+    self.assetman.vertex_heap.ps_data.bind(Render.Attrib.Tangent.value(), @offsetOf(formats.VertexPSData, "tangent"));
     checkGLError();
-    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
+    self.assetman.vertex_heap.ps_data.bind(Render.Attrib.UV.value(), @offsetOf(formats.VertexPSData, "uv"));
     checkGLError();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
     checkGLError();

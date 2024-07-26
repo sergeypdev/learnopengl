@@ -426,10 +426,7 @@ fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, material_o
     if (mesh.mNumUVComponents[0] != 2) return error.WrongUVComponents;
 
     var vertices = try allocator.alloc(Vector3, @intCast(mesh.mNumVertices));
-    var normals = try allocator.alloc(Vector3, @intCast(mesh.mNumVertices));
-    var tangents = try allocator.alloc(Vector3, @intCast(mesh.mNumVertices));
-    var uvs = try allocator.alloc(Vector2, @intCast(mesh.mNumVertices));
-
+    var ps_data = try allocator.alloc(formats.VertexPSData, @intCast(mesh.mNumVertices));
     var indices = try allocator.alloc(formats.Index, @intCast(mesh.mNumFaces * 3)); // triangles
 
     for (0..mesh.mNumVertices) |i| {
@@ -438,17 +435,17 @@ fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, material_o
             .y = mesh.mVertices[i].y,
             .z = mesh.mVertices[i].z,
         };
-        normals[i] = .{
+        ps_data[i].normal = .{
             .x = mesh.mNormals[i].x,
             .y = mesh.mNormals[i].y,
             .z = mesh.mNormals[i].z,
         };
-        tangents[i] = .{
+        ps_data[i].tangent = .{
             .x = mesh.mTangents[i].x,
             .y = mesh.mTangents[i].y,
             .z = mesh.mTangents[i].z,
         };
-        uvs[i] = .{
+        ps_data[i].uv = .{
             .x = mesh.mTextureCoords[0][i].x,
             .y = mesh.mTextureCoords[0][i].y,
         };
@@ -482,9 +479,7 @@ fn processMesh(allocator: std.mem.Allocator, scene: *const c.aiScene, material_o
             },
         },
         .vertices = vertices,
-        .normals = normals,
-        .tangents = tangents,
-        .uvs = uvs,
+        .ps_data = ps_data,
         .indices = indices,
         .material = material,
     };

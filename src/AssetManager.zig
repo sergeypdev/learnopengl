@@ -282,17 +282,7 @@ const NullMesh = LoadedMesh{
         .offset = 0,
         .stride = 0,
     },
-    .normals = BufferSlice{
-        .buffer = 0,
-        .offset = 0,
-        .stride = 0,
-    },
-    .tangents = BufferSlice{
-        .buffer = 0,
-        .offset = 0,
-        .stride = 0,
-    },
-    .uvs = BufferSlice{
+    .ps_data = BufferSlice{
         .buffer = 0,
         .offset = 0,
         .stride = 0,
@@ -339,13 +329,8 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !LoadedMesh {
 
     gl.namedBufferSubData(self.vertex_heap.vertices.buffer, @intCast(vertex_offset * @sizeOf(formats.Vector3)), @intCast(vertices_len * @sizeOf(formats.Vector3)), @ptrCast(mesh.vertices.ptr));
     checkGLError();
-    gl.namedBufferSubData(self.vertex_heap.normals.buffer, @intCast(vertex_offset * @sizeOf(formats.Vector3)), @intCast(vertices_len * @sizeOf(formats.Vector3)), @ptrCast(mesh.normals.ptr));
+    gl.namedBufferSubData(self.vertex_heap.ps_data.buffer, @intCast(vertex_offset * @sizeOf(formats.VertexPSData)), @intCast(vertices_len * @sizeOf(formats.VertexPSData)), @ptrCast(mesh.ps_data.ptr));
     checkGLError();
-    gl.namedBufferSubData(self.vertex_heap.tangents.buffer, @intCast(vertex_offset * @sizeOf(formats.Vector3)), @intCast(vertices_len * @sizeOf(formats.Vector3)), @ptrCast(mesh.tangents.ptr));
-    checkGLError();
-    gl.namedBufferSubData(self.vertex_heap.uvs.buffer, @intCast(vertex_offset * @sizeOf(formats.Vector2)), @intCast(vertices_len * @sizeOf(formats.Vector2)), @ptrCast(mesh.uvs.ptr));
-    checkGLError();
-
     const index_offset = allocation.index.offset;
     gl.namedBufferSubData(self.vertex_heap.indices.buffer, @intCast(index_offset * @sizeOf(formats.Index)), @intCast(mesh.indices.len * @sizeOf(formats.Index)), @ptrCast(mesh.indices.ptr));
 
@@ -361,20 +346,10 @@ fn loadMeshErr(self: *AssetManager, id: AssetId) !LoadedMesh {
             .offset = @intCast(vertex_offset * @sizeOf(formats.Vector3)),
             .stride = @sizeOf(formats.Vector3),
         },
-        .normals = .{
-            .buffer = self.vertex_heap.normals.buffer,
-            .offset = @intCast(vertex_offset * @sizeOf(formats.Vector3)),
-            .stride = @sizeOf(formats.Vector3),
-        },
-        .tangents = .{
-            .buffer = self.vertex_heap.tangents.buffer,
-            .offset = @intCast(vertex_offset * @sizeOf(formats.Vector3)),
-            .stride = @sizeOf(formats.Vector3),
-        },
-        .uvs = .{
-            .buffer = self.vertex_heap.uvs.buffer,
-            .offset = @intCast(vertex_offset * @sizeOf(formats.Vector2)),
-            .stride = @sizeOf(formats.Vector2),
+        .ps_data = .{
+            .buffer = self.vertex_heap.ps_data.buffer,
+            .offset = @intCast(vertex_offset * @sizeOf(formats.VertexPSData)),
+            .stride = @sizeOf(formats.VertexPSData),
         },
         .indices = .{
             .buffer = self.vertex_heap.indices.buffer,
@@ -544,9 +519,7 @@ const LoadedMesh = struct {
     aabb: AABB,
     heap_handle: VertexBufferHeap.Alloc,
     positions: BufferSlice,
-    normals: BufferSlice,
-    tangents: BufferSlice,
-    uvs: BufferSlice,
+    ps_data: BufferSlice,
     indices: IndexSlice,
     material: formats.Material,
 };
@@ -754,17 +727,15 @@ const VertexBufferHeap = struct {
             };
         }
 
-        pub fn bind(self: *const Buffer, index: gl.GLuint) void {
-            gl.bindVertexBuffer(index, self.buffer, 0, self.stride);
+        pub fn bind(self: *const Buffer, index: gl.GLuint, offset: gl.GLintptr) void {
+            gl.bindVertexBuffer(index, self.buffer, offset, self.stride);
         }
     };
 
     vertex_buddy: BuddyAllocator,
     index_buddy: BuddyAllocator,
     vertices: Buffer,
-    normals: Buffer,
-    tangents: Buffer,
-    uvs: Buffer,
+    ps_data: Buffer,
     indices: Buffer,
 
     pub fn init(allocator: std.mem.Allocator) !Self {
@@ -780,7 +751,7 @@ const VertexBufferHeap = struct {
         const vertex_buf_size = vertex_buddy.getSize();
         const index_buf_size = index_buddy.getSize();
 
-        var bufs = [_]gl.GLuint{ 0, 0, 0, 0, 0 };
+        var bufs = [_]gl.GLuint{ 0, 0, 0 };
         gl.createBuffers(bufs.len, &bufs);
         errdefer gl.deleteBuffers(bufs.len, &bufs);
 
@@ -791,10 +762,8 @@ const VertexBufferHeap = struct {
         }
 
         const vertices = Buffer.init(bufs[0], @sizeOf(formats.Vector3));
-        const normals = Buffer.init(bufs[1], @sizeOf(formats.Vector3));
-        const tangents = Buffer.init(bufs[2], @sizeOf(formats.Vector3));
-        const uvs = Buffer.init(bufs[3], @sizeOf(formats.Vector2));
-        const indices = Buffer.init(bufs[4], @sizeOf(formats.Index));
+        const ps_data = Buffer.init(bufs[1], @sizeOf(formats.VertexPSData));
+        const indices = Buffer.init(bufs[2], @sizeOf(formats.Index));
 
         gl.namedBufferStorage(
             vertices.buffer,
@@ -803,20 +772,8 @@ const VertexBufferHeap = struct {
             gl.DYNAMIC_STORAGE_BIT,
         );
         gl.namedBufferStorage(
-            normals.buffer,
-            @intCast(vertex_buf_size * @sizeOf(formats.Vector3)),
-            null,
-            gl.DYNAMIC_STORAGE_BIT,
-        );
-        gl.namedBufferStorage(
-            tangents.buffer,
-            @intCast(vertex_buf_size * @sizeOf(formats.Vector3)),
-            null,
-            gl.DYNAMIC_STORAGE_BIT,
-        );
-        gl.namedBufferStorage(
-            uvs.buffer,
-            @intCast(vertex_buf_size * @sizeOf(formats.Vector2)),
+            ps_data.buffer,
+            @intCast(vertex_buf_size * @sizeOf(formats.VertexPSData)),
             null,
             gl.DYNAMIC_STORAGE_BIT,
         );
@@ -831,9 +788,7 @@ const VertexBufferHeap = struct {
             .vertex_buddy = vertex_buddy,
             .index_buddy = index_buddy,
             .vertices = vertices,
-            .normals = normals,
-            .tangents = tangents,
-            .uvs = uvs,
+            .ps_data = ps_data,
             .indices = indices,
         };
     }
@@ -842,7 +797,7 @@ const VertexBufferHeap = struct {
         self.index_buddy.deinit();
         self.vertex_buddy.deinit();
 
-        const bufs = [_]gl.GLuint{ self.vertices, self.normals, self.tangents, self.uvs, self.indices };
+        const bufs = [_]gl.GLuint{ self.vertices, self.ps_data, self.indices };
         gl.deleteBuffers(bufs.len, &bufs);
     }
 
