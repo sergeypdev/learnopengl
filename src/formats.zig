@@ -23,18 +23,14 @@ pub const AABB = extern struct {
 };
 pub const Index = u32;
 
-pub const VertexPSData = extern struct {
-    normal: Vector3,
-    tangent: Vector3,
-    uv: Vector2,
-};
-
 pub const Mesh = struct {
     aabb: AABB,
     material: Material,
 
     vertices: []align(1) Vector3,
-    ps_data: []align(1) VertexPSData,
+    normals: []align(1) Vector3,
+    tangents: []align(1) Vector3,
+    uvs: []align(1) Vector2,
     indices: []align(1) Index,
 
     // This will panic if data is incorrect
@@ -67,9 +63,13 @@ pub const Mesh = struct {
         size = vert_len * @sizeOf(Vector3);
         const vertices = std.mem.bytesAsSlice(Vector3, buffer[offset .. offset + size]);
         offset += size;
+        const normals = std.mem.bytesAsSlice(Vector3, buffer[offset .. offset + size]);
+        offset += size;
+        const tangents = std.mem.bytesAsSlice(Vector3, buffer[offset .. offset + size]);
+        offset += size;
 
-        size = vert_len * @sizeOf(VertexPSData);
-        const ps_data = std.mem.bytesAsSlice(VertexPSData, buffer[offset .. offset + size]);
+        size = vert_len * @sizeOf(Vector2);
+        const uvs = std.mem.bytesAsSlice(Vector2, buffer[offset .. offset + size]);
         offset += size;
 
         size = ind_len * @sizeOf(Index);
@@ -80,14 +80,16 @@ pub const Mesh = struct {
             .aabb = aabb,
             .material = material.*,
             .vertices = vertices,
-            .ps_data = ps_data,
+            .normals = normals,
+            .tangents = tangents,
+            .uvs = uvs,
             .indices = indices,
         };
     }
 };
 
 pub fn writeMesh(writer: anytype, value: Mesh, endian: std.builtin.Endian) !void {
-    std.debug.assert(value.vertices.len == value.ps_data.len);
+    std.debug.assert(value.vertices.len == value.normals.len);
 
     // AABB
     {
@@ -104,10 +106,14 @@ pub fn writeMesh(writer: anytype, value: Mesh, endian: std.builtin.Endian) !void
     for (value.vertices) |v| {
         try writeVector3(writer, v, endian);
     }
-    for (value.ps_data) |data| {
-        try writeVector3(writer, data.normal, endian);
-        try writeVector3(writer, data.tangent, endian);
-        try writeVector2(writer, data.uv, endian);
+    for (value.normals) |n| {
+        try writeVector3(writer, n, endian);
+    }
+    for (value.tangents) |t| {
+        try writeVector3(writer, t, endian);
+    }
+    for (value.uvs) |uv| {
+        try writeVector2(writer, uv, endian);
     }
     for (value.indices) |i| {
         try writer.writeInt(Index, i, endian);
