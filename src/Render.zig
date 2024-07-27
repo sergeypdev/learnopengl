@@ -452,22 +452,23 @@ pub fn finish(self: *Render) void {
                 const rhs_mesh = render.assetman.resolveMesh(rhs.mesh);
                 const lhs_material: Material = if (lhs.material_override) |mat| mat else lhs_mesh.material;
                 const rhs_material: Material = if (rhs.material_override) |mat| mat else rhs_mesh.material;
-                return switch (lhs_material.blend_mode) {
-                    .Opaque => switch (rhs_material.blend_mode) {
-                        .AlphaBlend => true,
-                        .Opaque => false,
-                    },
-                    .AlphaBlend => switch (rhs_material.blend_mode) {
-                        .Opaque => false,
-                        .AlphaBlend => {
-                            const lhs_view_pos = render.camera.view_mat.mulByVec4(lhs.transform.extractTranslation().toVec4(1));
-                            const rhs_view_pos = render.camera.view_mat.mulByVec4(rhs.transform.extractTranslation().toVec4(1));
 
-                            // Back to front sorting. View pos has negative Z
-                            return lhs_view_pos.z() < rhs_view_pos.z();
-                        },
-                    },
-                };
+                const lhs_blend_num = @intFromEnum(lhs_material.blend_mode);
+                const rhs_blend_num = @intFromEnum(rhs_material.blend_mode);
+
+                if (lhs_material.blend_mode == .Opaque and rhs_material.blend_mode == .Opaque) {
+                    return lhs.mesh.id < rhs.mesh.id;
+                }
+
+                if (lhs_material.blend_mode == .AlphaBlend and rhs_material.blend_mode == .AlphaBlend) {
+                    const lhs_view_pos = render.camera.view_mat.mulByVec4(lhs.transform.extractTranslation().toVec4(1));
+                    const rhs_view_pos = render.camera.view_mat.mulByVec4(rhs.transform.extractTranslation().toVec4(1));
+
+                    // Back to front sorting. View pos has negative Z
+                    return lhs_view_pos.z() < rhs_view_pos.z();
+                }
+
+                return lhs_blend_num < rhs_blend_num;
             }
         }.lessThan);
     }
@@ -782,7 +783,6 @@ pub fn finish(self: *Render) void {
             .first_index = mesh.indices.offset / 4,
             .base_vertex = mesh.indices.base_vertex,
             .base_instance = 0,
-            .transform = cmd.transform,
         };
 
         rendered_count += 1;
@@ -812,36 +812,42 @@ pub fn finish(self: *Render) void {
     gl.namedBufferStorage(draw_cmd_data_buf, @intCast(@sizeOf(DrawCommandData) * rendered_count), draw_cmd_data.ptr, 0);
     gl.bindBufferBase(gl.SHADER_STORAGE_BUFFER, SSBO.DrawCommandData.value(), draw_cmd_data_buf);
 
-    gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.z_prepass).program);
-    gl.bindVertexArray(self.shadow_vao);
+    // Z Prepass
+    {
+        gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.z_prepass).program);
+        gl.bindVertexArray(self.shadow_vao);
 
-    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value(), 0);
-    checkGLError();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
-    checkGLError();
+        self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
+        checkGLError();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
+        checkGLError();
 
-    // gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(rendered_count), @sizeOf(DrawIndirectCmd));
+        gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(rendered_count), @sizeOf(DrawIndirectCmd));
+    }
 
-    gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
-    gl.bindVertexArray(self.mesh_vao);
-    gl.depthFunc(gl.LEQUAL);
+    // Main pass
+    {
+        gl.useProgram(self.assetman.resolveShaderProgram(a.ShaderPrograms.shaders.mesh).program);
+        gl.bindVertexArray(self.mesh_vao);
+        gl.depthFunc(gl.EQUAL);
 
-    gl.uniform1ui(Uniform.LightsCount.value(), lights_buf.count.*);
-    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMap2D.value(), self.shadow_texture_handle);
-    gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMapCube.value(), self.cube_shadow_texture_handle);
+        gl.uniform1ui(Uniform.LightsCount.value(), lights_buf.count.*);
+        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMap2D.value(), self.shadow_texture_handle);
+        gl.GL_ARB_bindless_texture.uniformHandleui64ARB(Uniform.ShadowMapCube.value(), self.cube_shadow_texture_handle);
 
-    self.assetman.vertex_heap.normals.bind(Render.Attrib.Normal.value());
-    checkGLError();
-    self.assetman.vertex_heap.tangents.bind(Render.Attrib.Tangent.value());
-    checkGLError();
-    self.assetman.vertex_heap.uvs.bind(Render.Attrib.UV.value());
-    checkGLError();
-    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
-    checkGLError();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
-    checkGLError();
+        self.assetman.vertex_heap.normals.bind(Render.Attrib.Normal.value());
+        checkGLError();
+        self.assetman.vertex_heap.tangents.bind(Render.Attrib.Tangent.value());
+        checkGLError();
+        self.assetman.vertex_heap.uvs.bind(Render.Attrib.UV.value());
+        checkGLError();
+        self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
+        checkGLError();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
+        checkGLError();
 
-    gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(rendered_count), @sizeOf(DrawIndirectCmd));
+        gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(rendered_count), 0);
+    }
 
     gl.disable(gl.BLEND);
     gl.depthFunc(gl.LESS);
@@ -1436,7 +1442,6 @@ const DrawIndirectCmd = extern struct {
     first_index: gl.GLuint,
     base_vertex: gl.GLint,
     base_instance: gl.GLuint,
-    transform: Mat4,
 };
 
 fn uboAlignedSizeOf(self: *const Render, comptime T: type) usize {

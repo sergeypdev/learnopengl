@@ -157,7 +157,7 @@ fn processScene(allocator: std.mem.Allocator, input: []const u8, output_dir: std
 
     const maybe_scene: ?*const c.aiScene = @ptrCast(c.aiImportFile(
         input_z.ptr,
-        @as(c_uint, @intCast(c.aiProcess_CalcTangentSpace | c.aiProcess_Triangulate | c.aiProcess_JoinIdenticalVertices | c.aiProcess_SortByPType | c.aiProcess_GenNormals)) | c.aiProcess_GenBoundingBoxes,
+        @as(c_uint, @intCast(c.aiProcess_CalcTangentSpace | c.aiProcess_Triangulate | c.aiProcess_JoinIdenticalVertices | c.aiProcess_SortByPType | c.aiProcess_GenNormals | c.aiProcess_ImproveCacheLocality)) | c.aiProcess_GenBoundingBoxes,
     ));
     if (maybe_scene == null) {
         std.log.err("assimp import error: {s}\n", .{c.aiGetErrorString()});

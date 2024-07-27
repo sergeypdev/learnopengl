@@ -403,7 +403,8 @@ fn loadTextureErr(self: *AssetManager, id: AssetId) !LoadedTexture {
     const data = try self.loadFile(self.frame_arena, path, TEXTURE_MAX_BYTES);
     defer self.frame_arena.free(data.bytes);
 
-    const texture = try formats.Texture.fromBuffer(self.frame_arena, data.bytes);
+    var texture = try formats.Texture.fromBuffer(self.allocator, data.bytes);
+    defer texture.free(self.allocator);
 
     var name: gl.GLuint = 0;
     gl.createTextures(gl.TEXTURE_2D, 1, &name);
@@ -540,7 +541,7 @@ const LoadedShaderProgram = struct {
     program: gl.GLuint,
 };
 
-const LoadedMesh = struct {
+pub const LoadedMesh = struct {
     aabb: AABB,
     heap_handle: VertexBufferHeap.Alloc,
     positions: BufferSlice,
@@ -771,10 +772,10 @@ const VertexBufferHeap = struct {
         // 256 mega vertices :)
         // memory usage for vertices (- indices) = n * 11 * 4
         // 4096, 12 will take 704 mb for vertices
-        var vertex_buddy = try BuddyAllocator.init(allocator, 4096, 12);
+        var vertex_buddy = try BuddyAllocator.init(allocator, 4096, 13);
         errdefer vertex_buddy.deinit();
 
-        var index_buddy = try BuddyAllocator.init(allocator, 4096, 12);
+        var index_buddy = try BuddyAllocator.init(allocator, 4096, 13);
         errdefer index_buddy.deinit();
 
         const vertex_buf_size = vertex_buddy.getSize();

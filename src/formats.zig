@@ -368,8 +368,8 @@ test "write and read scene" {
 
 pub const Material = extern struct {
     pub const BlendMode = enum(u8) {
-        Opaque,
-        AlphaBlend,
+        Opaque = 0,
+        AlphaBlend = 1,
     };
 
     albedo: Vec4 = Vec4.one(),

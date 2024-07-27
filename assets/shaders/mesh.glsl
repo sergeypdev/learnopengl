@@ -38,7 +38,7 @@ VERTEX_EXPORT VertexData {
   vec3 wNormal;
 } VertexOut;
 
-VERTEX_EXPORT flat int DrawID;
+VERTEX_EXPORT flat uint DrawID;
 
 float random(vec4 seed4) {
   float dot_product = dot(seed4, vec4(12.9898,78.233,45.164,94.673));
@@ -154,7 +154,7 @@ EvalMaterial evalMaterial() {
   result.albedo = textureSize(materials[materialIdx].albedo_map, 0) == ivec2(0) ? vec4(pow(materials[materialIdx].albedo.rgb, vec3(2.2)), materials[materialIdx].albedo.a) : texture(materials[materialIdx].albedo_map, VertexOut.uv * materials[materialIdx].albedo_map_uv_scale);
   float fMetallic = textureSize(materials[materialIdx].metallic_map, 0) == ivec2(0) ? materials[materialIdx].metallic : texture(materials[materialIdx].metallic_map, VertexOut.uv * materials[materialIdx].metallic_map_uv_scale).b;
   result.metallic = fMetallic > 0.1;
-  result.roughness = max(0.01, textureSize(materials[materialIdx].roughness_map, 0) == ivec2(0) ? materials[materialIdx].roughness : texture(materials[materialIdx].roughness_map, VertexOut.uv * materials[materialIdx].roughness_map_uv_scale).g);
+  result.roughness = max(1.0, textureSize(materials[materialIdx].roughness_map, 0) == ivec2(0) ? materials[materialIdx].roughness : texture(materials[materialIdx].roughness_map, VertexOut.uv * materials[materialIdx].roughness_map_uv_scale).g);
   result.emission = textureSize(materials[materialIdx].emission_map, 0) == ivec2(0) ? materials[materialIdx].emission : texture(materials[materialIdx].emission_map, VertexOut.uv * materials[materialIdx].emission_map_uv_scale).rgb;
 
   return result;
@@ -275,7 +275,7 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, vec3 P, vec3 N) {
   } else {
     int csm_split_idx = subgroupBroadcastFirst(getCSMSplit(light_idx, P.z));
     // Visualize CSM splits
-    //mat.albedo = vec4(mix(mat.albedo.rgb, csm_split_colors[csm_split_idx], 0.8), mat.albedo.a);
+    // mat.albedo = vec4(mix(mat.albedo.rgb, csm_split_colors[csm_split_idx], 0.8), mat.albedo.a);
     // Directional shadow
     vec2 shadow_map_texel_size = 1.0 / vec2(textureSize(shadow_maps, 0));
     shadow_offset *= shadow_map_texel_size.x;
@@ -290,24 +290,20 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, vec3 P, vec3 N) {
     texcoord.xyw = shadow_pos.xyz; // sampler2DArrayShadow strange texcoord mapping
     texcoord.z = shadow_map_idx + csm_split_idx;
 
-    float sum = 0;
-    sum = 1.0; // texture(shadow_maps, vec4(texcoord.xy, texcoord.zw));
-    // for (float y = -0.5; y <= 0.5; y += 1) {
-    //   for (float x = -0.5; x <= 0.5; x += 1) {
-    //     sum += ;
-    //   }
-    // }
-
-    shadow_mult = sum / 1.0;
+    float sum = 0;
+    for (float y = -1.5; y <= 1.5; y += 1) {
+      for (float x = -1.5; x <= 1.5; x += 1) {
+        sum += texture(shadow_maps, vec4(texcoord.xy + vec2(x, y) * shadow_map_texel_size, texcoord.zw));
+      }
+    }
+
+    shadow_mult = sum / 16.0;
   }
-  shadow_mult = clamp(shadow_mult, 0, 1);
+  shadow_mult = clamp(shadow_mult, 0.2, 1.0);
 
-  vec3 specBrdf = geomSmith(mat, NDotL) * geomSmith(mat, NDotV) * 0.25 * ggxDistribution(mat, NDotH) * schlickFresnel(mat, LDotH);
-
-  vec3 vecTerm = PI * specBrdf + diffuseBrdf;
-  float scalarTerm = NDotL * shadow_mult;
-
-  return scalarTerm * lightI + mat.emission;
+  vec3 specBrdf = 0.25 * ggxDistribution(mat, NDotH) * schlickFresnel(mat, LDotH) * geomSmith(mat, NDotL) * geomSmith(mat, NDotV);
+
+  return (diffuseBrdf + PI * specBrdf) * lightI * NDotL * shadow_mult + mat.emission;
 }
 
 void main() {
