@@ -7,6 +7,7 @@ const globals = @import("globals.zig");
 pub const Material = @import("formats.zig").Material;
 const math = @import("math.zig");
 const formats = @import("formats.zig");
+const tracy = @import("tracy");
 
 const za = @import("zalgebra");
 const Vec2 = za.Vec2;
@@ -438,13 +439,17 @@ pub fn draw(self: *Render, cmd: DrawCommand) void {
 }
 
 pub fn finish(self: *Render) void {
-    const ginit = globals.g_init;
+    const zone = tracy.initZone(@src(), .{ .name = "Render.finish" });
+    defer zone.deinit();
 
     const camera_projection = self.camera.projection();
     const view_proj = camera_projection.mul(self.camera.view_mat);
 
     // Sort draw calls: opaque -> blended
     {
+        const zoneSort = tracy.initZone(@src(), .{ .name = "Render.finish_sortDraws" });
+        defer zoneSort.deinit();
+
         const cmds = self.command_buffer[0..self.command_count];
         std.mem.sortUnstable(DrawCommand, cmds, self, struct {
             pub fn lessThan(render: *const Render, lhs: DrawCommand, rhs: DrawCommand) bool {
@@ -500,6 +505,9 @@ pub fn finish(self: *Render) void {
 
     // Light shadow maps
     {
+        const zoneShadowmaps = tracy.initZone(@src(), .{ .name = "Render.finish_shadowmaps" });
+        defer zoneShadowmaps.deinit();
+
         gl.enable(gl.DEPTH_CLAMP);
         defer gl.disable(gl.DEPTH_CLAMP);
 
@@ -737,55 +745,62 @@ pub fn finish(self: *Render) void {
     checkGLError();
     defer gl.deleteBuffers(1, &draw_cmd_data_buf);
 
-    const materials = self.materials_pbr_ssbo.getInstance(self.tripple_buffer_index);
-    materials.count.* = 0;
-
-    var material_map = std.StringHashMap(i32).init(self.frame_arena);
-
-    var materials_count: usize = 0;
     var rendered_count: usize = 0;
-    cmds: for (self.command_buffer[0..self.command_count]) |*cmd| {
-        const mesh = self.assetman.resolveMesh(cmd.mesh);
-        const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
 
-        if (!self.world_camera_frustum.intersectAABB(aabb.transform(cmd.transform))) {
-            continue;
+    // Prepare indirect draw commands
+    {
+        const zonePrepareInidirectDraws = tracy.initZone(@src(), .{ .name = "Render.finish_PrepareInidirectDraws" });
+        defer zonePrepareInidirectDraws.deinit();
+
+        const materials = self.materials_pbr_ssbo.getInstance(self.tripple_buffer_index);
+        materials.count.* = 0;
+
+        var material_map = std.StringHashMap(i32).init(self.frame_arena);
+
+        var materials_count: usize = 0;
+        cmds: for (self.command_buffer[0..self.command_count]) |*cmd| {
+            const mesh = self.assetman.resolveMesh(cmd.mesh);
+            // const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
+
+            // if (!self.world_camera_frustum.intersectAABB(aabb.transform(cmd.transform))) {
+            //     continue;
+            // }
+
+            const material: Material = if (cmd.material_override) |mat| mat else mesh.material;
+
+            // Opaque objects are drawn, start rendering alpha blended objects
+            if (material.blend_mode == .AlphaBlend and !switched_to_alpha_blend) {
+                break :cmds;
+                // switched_to_alpha_blend = true;
+                // gl.enable(gl.BLEND);
+                // gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            }
+
+            const material_bytes = std.mem.asBytes(&material);
+            const material_copy = self.frame_arena.alloc(u8, material_bytes.len) catch @panic("OOM");
+            @memcpy(material_copy, material_bytes);
+            const gop = material_map.getOrPut(material_copy) catch @panic("OOM");
+            if (!gop.found_existing) {
+                gop.value_ptr.* = @intCast(materials_count);
+                materials.data[materials_count] = MaterialPBR.fromMaterial(self.assetman, &material);
+                materials_count += 1;
+            }
+
+            draw_cmd_data[rendered_count] = DrawCommandData{
+                .transform = cmd.transform,
+                .material_index = gop.value_ptr.*,
+            };
+
+            draw_indirect_cmds[rendered_count] = DrawIndirectCmd{
+                .count = mesh.indices.count,
+                .instance_count = 1,
+                .first_index = mesh.indices.offset / 4,
+                .base_vertex = mesh.indices.base_vertex,
+                .base_instance = 0,
+            };
+
+            rendered_count += 1;
         }
-
-        const material: Material = if (cmd.material_override) |mat| mat else mesh.material;
-
-        // Opaque objects are drawn, start rendering alpha blended objects
-        if (material.blend_mode == .AlphaBlend and !switched_to_alpha_blend) {
-            break :cmds;
-            // switched_to_alpha_blend = true;
-            // gl.enable(gl.BLEND);
-            // gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        }
-
-        const material_bytes = std.mem.asBytes(&material);
-        const material_copy = self.frame_arena.alloc(u8, material_bytes.len) catch @panic("OOM");
-        @memcpy(material_copy, material_bytes);
-        const gop = material_map.getOrPut(material_copy) catch @panic("OOM");
-        if (!gop.found_existing) {
-            gop.value_ptr.* = @intCast(materials_count);
-            materials.data[materials_count] = MaterialPBR.fromMaterial(self.assetman, &material);
-            materials_count += 1;
-        }
-
-        draw_cmd_data[rendered_count] = DrawCommandData{
-            .transform = cmd.transform,
-            .material_index = gop.value_ptr.*,
-        };
-
-        draw_indirect_cmds[rendered_count] = DrawIndirectCmd{
-            .count = mesh.indices.count,
-            .instance_count = 1,
-            .first_index = mesh.indices.offset / 4,
-            .base_vertex = mesh.indices.base_vertex,
-            .base_instance = 0,
-        };
-
-        rendered_count += 1;
     }
 
     {
@@ -992,8 +1007,6 @@ pub fn finish(self: *Render) void {
     }
 
     self.gl_fences[self.tripple_buffer_index] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-    c.SDL_GL_SwapWindow(ginit.window);
-    //c.SDL_Delay(1);
 }
 
 pub fn pointLightRange(self: *const PointLight) f32 {
@@ -1044,26 +1057,50 @@ const cube_camera_dirs = [6]CubeCameraDir{
 };
 
 fn renderShadow(self: *Render, frustum: *const math.Frustum) void {
+    const zone = tracy.initZone(@src(), .{ .name = "Render.renderShadow" });
+    defer zone.deinit();
+    _ = frustum; // autofix
+    self.assetman.vertex_heap.vertices.bind(Render.Attrib.Position.value());
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, self.assetman.vertex_heap.indices.buffer);
+
+    // TODO: this wastes space in temp allocator
+    var draw_indirect_cmds = std.ArrayList(DrawIndirectCmd).init(self.frame_arena);
+    var transforms = std.ArrayList(Mat4).init(self.frame_arena);
+
     for (self.command_buffer[0..self.command_count]) |*cmd| {
         const mesh = self.assetman.resolveMesh(cmd.mesh);
-        const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
+        // const aabb = math.AABB.fromMinMax(mesh.aabb.min, mesh.aabb.max);
 
-        if (!frustum.intersectAABBSkipNear(aabb.transform(cmd.transform))) {
-            continue;
-        }
+        // if (!frustum.intersectAABBSkipNear(aabb.transform(cmd.transform))) {
+        //     continue;
+        // }
 
-        gl.uniformMatrix4fv(Uniform.ModelMatrix.value(), 1, gl.FALSE, @ptrCast(&cmd.transform.data));
-        mesh.positions.bind(Render.Attrib.Position.value());
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.indices.buffer);
+        const draw_indirect_cmd = draw_indirect_cmds.addOne() catch @panic("OOM");
+        const transform = transforms.addOne() catch @panic("OOM");
 
-        gl.drawElementsBaseVertex(
-            gl.TRIANGLES,
-            @intCast(mesh.indices.count),
-            mesh.indices.type,
-            @ptrFromInt(mesh.indices.offset),
-            mesh.indices.base_vertex,
-        );
+        draw_indirect_cmd.* = .{
+            .count = mesh.indices.count,
+            .instance_count = 1,
+            .first_index = mesh.indices.offset / 4,
+            .base_vertex = mesh.indices.base_vertex,
+            .base_instance = 0,
+        };
+
+        transform.* = cmd.transform;
     }
+
+    var bufs = [2]gl.GLuint{ 0, 0 };
+    gl.createBuffers(bufs.len, &bufs);
+    checkGLError();
+    defer _ = gl.deleteBuffers(bufs.len, &bufs);
+
+    gl.namedBufferStorage(bufs[0], @intCast(@sizeOf(DrawIndirectCmd) * draw_indirect_cmds.items.len), draw_indirect_cmds.items.ptr, 0);
+    gl.namedBufferStorage(bufs[1], @intCast(@sizeOf(Mat4) * transforms.items.len), transforms.items.ptr, 0);
+
+    gl.bindBuffer(gl.DRAW_INDIRECT_BUFFER, bufs[0]);
+    gl.bindBufferBase(gl.SHADER_STORAGE_BUFFER, SSBO.DrawCommandData.value(), bufs[1]);
+
+    gl.multiDrawElementsIndirect(gl.TRIANGLES, gl.UNSIGNED_INT, null, @intCast(draw_indirect_cmds.items.len), 0);
 }
 
 pub fn checkGLError() void {

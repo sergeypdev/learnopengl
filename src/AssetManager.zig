@@ -24,6 +24,7 @@ const checkGLError = @import("Render.zig").checkGLError;
 const BuddyAllocator = @import("BuddyAllocator.zig");
 const Vec2 = @import("zalgebra").Vec2;
 const Vec3 = @import("zalgebra").Vec3;
+const tracy = @import("tracy");
 
 pub const AssetId = assets.AssetId;
 pub const Handle = assets.Handle;
@@ -158,6 +159,9 @@ pub fn resolveMaterial(self: *AssetManager, handle: Handle.Material) formats.Mat
 
 // TODO: proper watching
 pub fn watchChanges(self: *AssetManager) void {
+    const zone = tracy.initZone(@src(), .{ .name = "AssetManager.watchChanges" });
+    defer zone.deinit();
+
     var iter = self.loaded_assets.iterator();
     while (iter.next()) |entry| {
         const gop = self.modified_times.getOrPut(self.allocator, entry.key_ptr.*) catch return;

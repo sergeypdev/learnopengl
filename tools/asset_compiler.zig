@@ -44,7 +44,7 @@ pub fn resolveAssetTypeByExtension(path: []const u8) ?AssetType {
     if (std.mem.endsWith(u8, path, ".glsl")) {
         return .Shader;
     }
-    if (std.mem.endsWith(u8, path, ".png") or std.mem.endsWith(u8, path, ".jpg") or std.mem.endsWith(u8, path, ".exr")) {
+    if (std.mem.endsWith(u8, path, ".png") or std.mem.endsWith(u8, path, ".jpg") or std.mem.endsWith(u8, path, ".exr") or std.mem.endsWith(u8, path, ".dds") or std.mem.endsWith(u8, path, ".tga")) {
         return .Texture;
     }
     return null;

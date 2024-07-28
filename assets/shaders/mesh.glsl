@@ -154,7 +154,7 @@ EvalMaterial evalMaterial() {
   result.albedo = textureSize(materials[materialIdx].albedo_map, 0) == ivec2(0) ? vec4(pow(materials[materialIdx].albedo.rgb, vec3(2.2)), materials[materialIdx].albedo.a) : texture(materials[materialIdx].albedo_map, VertexOut.uv * materials[materialIdx].albedo_map_uv_scale);
   float fMetallic = textureSize(materials[materialIdx].metallic_map, 0) == ivec2(0) ? materials[materialIdx].metallic : texture(materials[materialIdx].metallic_map, VertexOut.uv * materials[materialIdx].metallic_map_uv_scale).b;
   result.metallic = fMetallic > 0.1;
-  result.roughness = max(1.0, textureSize(materials[materialIdx].roughness_map, 0) == ivec2(0) ? materials[materialIdx].roughness : texture(materials[materialIdx].roughness_map, VertexOut.uv * materials[materialIdx].roughness_map_uv_scale).g);
+  result.roughness = max(0.01, textureSize(materials[materialIdx].roughness_map, 0) == ivec2(0) ? materials[materialIdx].roughness : texture(materials[materialIdx].roughness_map, VertexOut.uv * materials[materialIdx].roughness_map_uv_scale).g);
   result.emission = textureSize(materials[materialIdx].emission_map, 0) == ivec2(0) ? materials[materialIdx].emission : texture(materials[materialIdx].emission_map, VertexOut.uv * materials[materialIdx].emission_map_uv_scale).rgb;
 
   return result;
@@ -169,7 +169,7 @@ vec3 schlickFresnel(EvalMaterial mat, float LDotH) {
   return f0 + (1 - f0) * pow(1.0 - LDotH, 5);
 }
 
-const float eps = 0.0000001;
+const float eps = 0.0001;
 
 float geomSmith(EvalMaterial mat, float DotVal) {
   float k = (mat.roughness + 1.0) * (mat.roughness + 1.0) / 8.0;
@@ -299,7 +299,7 @@ vec3 microfacetModel(EvalMaterial mat, int light_idx, vec3 P, vec3 N) {
 
     shadow_mult = sum / 16.0;
   }
-  shadow_mult = clamp(shadow_mult, 0.2, 1.0);
+  shadow_mult = clamp(shadow_mult, 0.3, 1.0);
 
   vec3 specBrdf = 0.25 * ggxDistribution(mat, NDotH) * schlickFresnel(mat, LDotH) * geomSmith(mat, NDotL) * geomSmith(mat, NDotV);
 
@@ -311,6 +311,7 @@ void main() {
   sampler2D normal_map = materials[materialIdx].normal_map;
   vec2 normal_map_uv_scale = materials[materialIdx].normal_map_uv_scale;
   EvalMaterial material = evalMaterial();
+  material.roughness = material.albedo.a < 1.0 ? 1.0 : material.roughness;
   
   vec3 N = textureSize(normal_map, 0) == ivec2(0) ? vec3(0.5) : vec3(texture(normal_map, VertexOut.uv * normal_map_uv_scale).xy, 0);
   N = N * 2.0 - 1.0;

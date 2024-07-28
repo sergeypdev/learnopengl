@@ -27,6 +27,10 @@
             .url = "https://github.com/sergeypdev/zalgebra/tarball/43371bf211ad574cde90f653fea171f1cccb1716",
             .hash = "1220e1439198c5206dbb924420aac0f57dd11fd4b6639e1aa9559abc09f91bfd2c9a",
         },
+        .@"zig-tracy" = .{
+            .url = "https://github.com/sergeypdev/zig-tracy/tarball/2b818574810a66deacc424298c1a7679ca6e4375",
+            .hash = "1220638bc94d67225a620e1abd71d85b299c8b764490fd51233ed73d76ee44cc5835",
+        },
     },
     .paths = .{
         // This makes *all* files, recursively, included in this package. It is generally

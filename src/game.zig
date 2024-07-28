@@ -15,6 +15,7 @@ const Mat4 = za.Mat4;
 const Quat = za.Quat;
 const a = @import("asset_manifest");
 const windows = std.os.windows;
+const tracy = @import("tracy");
 
 pub extern "dwmapi" fn DwmEnableMMCSS(fEnableMMCSS: windows.BOOL) callconv(windows.WINAPI) windows.HRESULT;
 pub extern "dwmapi" fn DwmFlush() callconv(windows.WINAPI) void;
@@ -161,6 +162,7 @@ const mesh_program = a.ShaderPrograms.mesh;
 
 export fn game_init(global_allocator: *std.mem.Allocator) void {
     loadGL();
+    tracy.startupProfiler();
 
     std.log.debug("game_init\n", .{});
     globals.g_mem = global_allocator.create(GameMemory) catch @panic("OOM");
@@ -188,8 +190,8 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
 
     _ = globals.g_mem.world.addEntity(.{
         .flags = .{ .dir_light = true, .rotate = true },
-        .transform = .{ .rot = Quat.fromEulerAngles(Vec3.new(20, 0, 0)) },
-        .light = .{ .color_intensity = Vec4.new(1, 1, 0.83, 0.7) },
+        .transform = .{ .rot = Quat.fromEulerAngles(Vec3.new(70, 0, 0)) },
+        .light = .{ .color_intensity = Vec4.new(std.math.pow(f32, 1, 2.2), std.math.pow(f32, 0.9568627450980393, 2.2), std.math.pow(f32, 0.9176470588235294, 2.2), 1.0) },
         .rotate = .{ .axis = Vec3.up(), .rate = -10 },
     });
 
@@ -224,70 +226,72 @@ export fn game_init(global_allocator: *std.mem.Allocator) void {
     // });
 
     // Plane
-    _ = globals.g_mem.world.addEntity(.{
-        .flags = .{ .mesh = true },
-        .transform = .{ .scale = Vec3.one().scale(10) },
-        .mesh = .{
-            .handle = a.Meshes.plane.Plane,
-            .material = .{
-                .albedo = Vec4.one(),
-                .normal_map = a.Textures.@"tile.norm",
-            },
-            .override_material = true,
-        },
-    });
+    // _ = globals.g_mem.world.addEntity(.{
+    //     .flags = .{ .mesh = true },
+    //     .transform = .{ .scale = Vec3.one().scale(10) },
+    //     .mesh = .{
+    //         .handle = a.Meshes.plane.Plane,
+    //         .material = .{
+    //             .albedo = Vec4.one(),
+    //             .normal_map = a.Textures.@"tile.norm",
+    //         },
+    //         .override_material = true,
+    //     },
+    // });
 
     // 10 dielectric bunnies
-    {
-        for (0..100) |y| {
-            for (0..10) |x| {
-                _ = globals.g_mem.world.addEntity(.{
-                    .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(x)) * 0.3 - 0.3 * 4.5, 0, @as(f32, @floatFromInt(y)) * 0.3 - 0.3 * 4.5) },
+    // {
+    //     for (0..100) |y| {
+    //         for (0..1) |x| {
+    //             _ = globals.g_mem.world.addEntity(.{
+    //                 .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(x)) * 0.3 - 0.3 * 4.5, 0, @as(f32, @floatFromInt(y)) * 0.3 - 0.3 * 4.5) },
 
-                    .flags = .{ .mesh = true },
-                    .mesh = .{
-                        .handle = a.Meshes.bunny.BunnyStanfordUVUnwrapped_res1_bun_zipper_res1,
-                        .material = .{
-                            .albedo_map = a.Textures.bunny_tex1,
-                            // .normal_map = a.Textures.@"tile.norm",
-                            .roughness = @as(f32, @floatFromInt(y)) / 100.0,
-                        },
-                        .override_material = true,
-                    },
-                });
-            }
-        }
-    }
-    // 10 metallic bunnies
-    {
-        for (0..10) |i| {
-            _ = globals.g_mem.world.addEntity(.{
-                .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3 - 0.3 * 4.5, 0.3, 0) },
+    //                 .flags = .{ .mesh = true },
+    //                 .mesh = .{
+    //                     .handle = a.Meshes.bunny.BunnyStanfordUVUnwrapped_res1_bun_zipper_res1,
+    //                     .material = .{
+    //                         .albedo_map = a.Textures.bunny_tex1,
+    //                         // .normal_map = a.Textures.@"tile.norm",
+    //                         .roughness = @as(f32, @floatFromInt(y)) / 100.0,
+    //                     },
+    //                     .override_material = true,
+    //                 },
+    //             });
+    //         }
+    //     }
+    // }
+    // // 10 metallic bunnies
+    // {
+    //     for (0..10) |i| {
+    //         _ = globals.g_mem.world.addEntity(.{
+    //             .transform = .{ .pos = Vec3.new(@as(f32, @floatFromInt(i)) * 0.3 - 0.3 * 4.5, 0.3, 0) },
 
-                .flags = .{ .mesh = true },
-                .mesh = .{
-                    .handle = a.Meshes.bunny.BunnyStanfordUVUnwrapped_res1_bun_zipper_res1,
-                    .material = .{
-                        .blend_mode = .AlphaBlend,
-                        .albedo = Vec4.new(1.000, 0.766, 0.336, 0.5),
-                        // .albedo_map = a.Textures.bunny_tex1,
-                        // .normal_map = a.Textures.@"tile.norm",
-                        .roughness = @as(f32, @floatFromInt(i + 1)) / 10.0,
-                        .metallic = 1.0,
-                    },
-                    .override_material = true,
-                },
-            });
-        }
-    }
+    //             .flags = .{ .mesh = true },
+    //             .mesh = .{
+    //                 .handle = a.Meshes.bunny.BunnyStanfordUVUnwrapped_res1_bun_zipper_res1,
+    //                 .material = .{
+    //                     .blend_mode = .AlphaBlend,
+    //                     .albedo = Vec4.new(1.000, 0.766, 0.336, 0.5),
+    //                     // .albedo_map = a.Textures.bunny_tex1,
+    //                     // .normal_map = a.Textures.@"tile.norm",
+    //                     .roughness = @as(f32, @floatFromInt(i + 1)) / 10.0,
+    //                     .metallic = 1.0,
+    //                 },
+    //                 .override_material = true,
+    //             },
+    //         });
+    //     }
+    // }
 
-    const scene = globals.g_mem.world.createScene(globals.g_assetman.resolveScene(a.Scenes.amd_ryzen_9.scene));
+    const scene = globals.g_mem.world.createScene(globals.g_assetman.resolveScene(a.Scenes.bistro.scene));
     const ent = globals.g_mem.world.getEntity(scene) orelse @panic("WTF");
-    ent.data.transform.pos = Vec3.new(0, 1, 0);
-    ent.data.transform.scale = Vec3.one().scale(0.2);
+    ent.data.transform.pos = Vec3.new(0, 0, 0);
+    // ent.data.transform.scale = Vec3.one().scale(1.0);
 }
 
 export fn game_update() bool {
+    const zoneGameUpdate = tracy.initZone(@src(), .{});
+    defer zoneGameUpdate.deinit();
     const ginit = globals.g_init;
     const gmem = globals.g_mem;
     // std.debug.print("FPS: {d}\n", .{1.0 / g_mem.delta_time});
@@ -298,108 +302,112 @@ export fn game_update() bool {
     var move = Vec3.zero();
     var look = Vec2.zero();
 
-    while (c.SDL_PollEvent(&event) != 0) {
-        switch (event.type) {
-            c.SDL_QUIT => {
-                return false;
-            },
-            c.SDL_MOUSEMOTION => {
-                if (gmem.mouse_focus) {
-                    look.xMut().* += @floatFromInt(event.motion.xrel);
-                    look.yMut().* += @floatFromInt(event.motion.yrel);
-                }
-            },
-            c.SDL_MOUSEBUTTONUP => {
-                if (!gmem.mouse_focus) {
-                    _ = c.SDL_SetRelativeMouseMode(c.SDL_TRUE);
+    {
+        const zone = tracy.initZone(@src(), .{ .name = "SDL poll events" });
+        defer zone.deinit();
+        while (c.SDL_PollEvent(&event) != 0) {
+            switch (event.type) {
+                c.SDL_QUIT => {
+                    return false;
+                },
+                c.SDL_MOUSEMOTION => {
+                    if (gmem.mouse_focus) {
+                        look.xMut().* += @floatFromInt(event.motion.xrel);
+                        look.yMut().* += @floatFromInt(event.motion.yrel);
+                    }
+                },
+                c.SDL_MOUSEBUTTONUP => {
+                    if (!gmem.mouse_focus) {
+                        _ = c.SDL_SetRelativeMouseMode(c.SDL_TRUE);
 
-                    gmem.mouse_focus = true;
-                }
-            },
-            c.SDL_MOUSEWHEEL => {
-                if (gmem.mouse_focus) {
-                    gmem.free_cam.move_speed = @max(gmem.free_cam.move_speed + event.wheel.preciseY * 0.1, 0);
-                }
-            },
-            c.SDL_KEYUP, c.SDL_KEYDOWN => {
-                const pressed = event.key.state == c.SDL_PRESSED;
+                        gmem.mouse_focus = true;
+                    }
+                },
+                c.SDL_MOUSEWHEEL => {
+                    if (gmem.mouse_focus) {
+                        gmem.free_cam.move_speed = @max(gmem.free_cam.move_speed + event.wheel.preciseY * 0.1, 0);
+                    }
+                },
+                c.SDL_KEYUP, c.SDL_KEYDOWN => {
+                    const pressed = event.key.state == c.SDL_PRESSED;
 
-                switch (event.key.keysym.scancode) {
-                    // Toggle fullscreen
-                    c.SDL_SCANCODE_RETURN => {
-                        if (event.type == c.SDL_KEYDOWN and event.key.keysym.mod & c.KMOD_ALT > 0) {
-                            toggleFullScreen() catch continue;
-                        }
-                    },
-                    // Toggle vsync
-                    c.SDL_SCANCODE_F10 => {
-                        if (event.type == c.SDL_KEYDOWN) {
-                            const newSwap: c_int = if (ginit.vsync) 0 else 1;
-                            sdl_try(c.SDL_GL_SetSwapInterval(newSwap)) catch continue;
-                            ginit.vsync = !ginit.vsync;
-                        }
-                    },
-                    // Freeze view frustum
-                    c.SDL_SCANCODE_F8 => {
-                        if (event.type == c.SDL_KEYDOWN) {
-                            gmem.render.update_view_frustum = !gmem.render.update_view_frustum;
-                        }
-                    },
-                    // Expand camera far
-                    c.SDL_SCANCODE_F7 => {
-                        if (event.type == c.SDL_KEYDOWN) {
-                            if (gmem.render.camera.far == 10) {
-                                gmem.render.camera.far = 50;
-                            } else {
-                                gmem.render.camera.far = 10;
-                            }
-                        }
-                    },
-                    c.SDL_SCANCODE_ESCAPE => {
-                        if (event.type == c.SDL_KEYUP) {
-                            if (ginit.fullscreen) {
+                    switch (event.key.keysym.scancode) {
+                        // Toggle fullscreen
+                        c.SDL_SCANCODE_RETURN => {
+                            if (event.type == c.SDL_KEYDOWN and event.key.keysym.mod & c.KMOD_ALT > 0) {
                                 toggleFullScreen() catch continue;
-                            } else if (gmem.mouse_focus) {
-                                _ = c.SDL_SetRelativeMouseMode(c.SDL_FALSE);
-                                gmem.mouse_focus = false;
-                            } else {
-                                return false;
                             }
-                        }
-                    },
-                    c.SDL_SCANCODE_W => {
-                        gmem.input_state.forward = pressed;
-                    },
-                    c.SDL_SCANCODE_S => {
-                        gmem.input_state.backward = pressed;
-                    },
-                    c.SDL_SCANCODE_A => {
-                        gmem.input_state.left = pressed;
-                    },
-                    c.SDL_SCANCODE_D => {
-                        gmem.input_state.right = pressed;
-                    },
-                    c.SDL_SCANCODE_SPACE => {
-                        gmem.input_state.up = pressed;
-                    },
-                    c.SDL_SCANCODE_LCTRL => {
-                        gmem.input_state.down = pressed;
-                    },
-                    else => {},
-                }
-            },
-            c.SDL_WINDOWEVENT => {
-                switch (event.window.event) {
-                    c.SDL_WINDOWEVENT_SIZE_CHANGED => {
-                        c.SDL_GL_GetDrawableSize(ginit.window, &ginit.width, &ginit.height);
-                        std.log.debug("w: {}, h: {}\n", .{ ginit.width, ginit.height });
+                        },
+                        // Toggle vsync
+                        c.SDL_SCANCODE_F10 => {
+                            if (event.type == c.SDL_KEYDOWN) {
+                                const newSwap: c_int = if (ginit.vsync) 0 else 1;
+                                sdl_try(c.SDL_GL_SetSwapInterval(newSwap)) catch continue;
+                                ginit.vsync = !ginit.vsync;
+                            }
+                        },
+                        // Freeze view frustum
+                        c.SDL_SCANCODE_F8 => {
+                            if (event.type == c.SDL_KEYDOWN) {
+                                gmem.render.update_view_frustum = !gmem.render.update_view_frustum;
+                            }
+                        },
+                        // Expand camera far
+                        c.SDL_SCANCODE_F7 => {
+                            if (event.type == c.SDL_KEYDOWN) {
+                                if (gmem.render.camera.far == 10) {
+                                    gmem.render.camera.far = 50;
+                                } else {
+                                    gmem.render.camera.far = 10;
+                                }
+                            }
+                        },
+                        c.SDL_SCANCODE_ESCAPE => {
+                            if (event.type == c.SDL_KEYUP) {
+                                if (ginit.fullscreen) {
+                                    toggleFullScreen() catch continue;
+                                } else if (gmem.mouse_focus) {
+                                    _ = c.SDL_SetRelativeMouseMode(c.SDL_FALSE);
+                                    gmem.mouse_focus = false;
+                                } else {
+                                    return false;
+                                }
+                            }
+                        },
+                        c.SDL_SCANCODE_W => {
+                            gmem.input_state.forward = pressed;
+                        },
+                        c.SDL_SCANCODE_S => {
+                            gmem.input_state.backward = pressed;
+                        },
+                        c.SDL_SCANCODE_A => {
+                            gmem.input_state.left = pressed;
+                        },
+                        c.SDL_SCANCODE_D => {
+                            gmem.input_state.right = pressed;
+                        },
+                        c.SDL_SCANCODE_SPACE => {
+                            gmem.input_state.up = pressed;
+                        },
+                        c.SDL_SCANCODE_LCTRL => {
+                            gmem.input_state.down = pressed;
+                        },
+                        else => {},
+                    }
+                },
+                c.SDL_WINDOWEVENT => {
+                    switch (event.window.event) {
+                        c.SDL_WINDOWEVENT_SIZE_CHANGED => {
+                            c.SDL_GL_GetDrawableSize(ginit.window, &ginit.width, &ginit.height);
+                            std.log.debug("w: {}, h: {}\n", .{ ginit.width, ginit.height });
 
-                        gl.viewport(0, 0, ginit.width, ginit.height);
-                    },
-                    else => {},
-                }
-            },
-            else => {},
+                            gl.viewport(0, 0, ginit.width, ginit.height);
+                        },
+                        else => {},
+                    }
+                },
+                else => {},
+            }
         }
     }
 
@@ -438,6 +446,8 @@ export fn game_update() bool {
 
     // Update
     {
+        const zone = tracy.initZone(@src(), .{ .name = "update entities" });
+        defer zone.deinit();
         for (gmem.world.entities[0..gmem.world.entity_count]) |*ent| {
             if (!ent.data.flags.active) continue;
 
@@ -449,6 +459,8 @@ export fn game_update() bool {
 
     // Render
     {
+        const zone = tracy.initZone(@src(), .{ .name = "game.render()" });
+        defer zone.deinit();
         gmem.render.begin();
         defer gmem.render.finish();
 
@@ -503,7 +515,15 @@ export fn game_update() bool {
         }
     }
 
-    globals.g_assetman.watchChanges();
+    {
+        const zone = tracy.initZone(@src(), .{ .name = "SDL_GL_SwapWindow" });
+        defer zone.deinit();
+        c.SDL_GL_SwapWindow(ginit.window);
+    }
+    tracy.frameMark();
+    //c.SDL_Delay(1);
+
+    // globals.g_assetman.watchChanges();
 
     return true;
 }
@@ -514,6 +534,7 @@ export fn game_shutdown() void {
     gmem.global_allocator.free(gmem.frame_fba.buffer);
     gmem.global_allocator.destroy(gmem);
     gl.disable(gl.DEBUG_OUTPUT);
+    tracy.shutdownProfiler();
 }
 
 export fn game_shutdown_window() void {

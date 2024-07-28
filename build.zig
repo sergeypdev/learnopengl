@@ -23,6 +23,10 @@ pub fn build(b: *Build) void {
         "Prioritize performance, safety, or binary size for build time tools",
     ) orelse .Debug;
 
+    const tracy = b.dependency("zig-tracy", .{
+        .target = target,
+        .optimize = optimize,
+    });
     const zalgebra_dep = b.dependency("zalgebra", .{});
 
     const assets_mod = b.addModule("assets", .{ .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/assets/root.zig" } } });
@@ -62,6 +66,8 @@ pub fn build(b: *Build) void {
         l.root_module.addImport("zalgebra", zalgebra_dep.module("zalgebra"));
         l.root_module.addImport("assets", assets_mod);
         l.root_module.addImport("asset_manifest", asset_manifest_mod);
+        l.root_module.addImport("tracy", tracy.module("tracy"));
+        l.linkLibrary(tracy.artifact("tracy"));
     }
 
     const install_lib = b.addInstallArtifact(lib, .{ .dest_dir = .{ .override = .prefix } });
@@ -150,6 +156,8 @@ const asset_extensions = [_][]const u8{
     "glsl",
     "prog",
     "png",
+    "dds",
+    "tga",
     "jpg",
     "exr",
     "fbx",
